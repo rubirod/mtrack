@@ -1,0 +1,14 @@
+{
+  "name": "mtrack",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Personal finance tracker with AI categorization",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build"
+  }
+}

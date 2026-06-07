@@ -1,0 +1,61 @@
+name: Deploy PWA to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'packages/core/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy-web.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Opt in to running JS actions on Node 24 ahead of the 2026-06-16 forced
+# rollout. All actions used here still ship Node 20 binaries; this flag asks
+# the runner to use the host's Node 24 instead.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @mtrack/web build
+        env:
+          # Repo name is mtrack, so base is /mtrack/. Override here only for forks.
+          MTRACK_BASE: /mtrack/
+          # Google OAuth Client ID is baked into the build. Public by design;
+          # Authorized JavaScript origins on the OAuth client restrict its use
+          # to the deployed PWA's domain. Set as a repo variable (Settings →
+          # Secrets and variables → Actions → Variables → New repository variable).
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

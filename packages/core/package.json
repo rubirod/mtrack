@@ -1,0 +1,22 @@
+{
+  "name": "@mtrack/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Isomorphic core: operation types, classifier, sheet-backed storage",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.0"
+  }
+}
