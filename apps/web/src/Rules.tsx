@@ -3,6 +3,7 @@ import {
   assertWritableTab,
   loadClassifyConfig,
   reclassifyAll,
+  upsertAccountRouting,
   type Row,
   type SheetsAPI,
 } from '@mtrack/core';
@@ -87,7 +88,6 @@ interface MerchantRuleRow {
 }
 
 const BALANCES_HEADERS = ['name', 'currency', 'type', 'archived'];
-const ACCOUNTS_HEADERS = ['sourceChannel', 'tail', 'balance'];
 const BANK_MAP_HEADERS = ['bankCategory', 'category'];
 const MERCHANT_HEADERS = ['match', 'category'];
 const CP_HEADERS = ['match', 'kind', 'label', 'category', 'suggest', 'excluded', 'field'];
@@ -308,11 +308,18 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
 
   async function saveAccounts(): Promise<void> {
     await withBusy(async () => {
-      const rows = accounts
-        .filter((a) => a.balance.trim())
-        .map((a) => [a.sourceChannel, a.tail, a.balance.trim()] as Row);
-      await rewriteTab(api, 'accounts', ACCOUNTS_HEADERS, rows);
-      setStatus(`Routed ${rows.length} instruments to balances.`);
+      // Non-destructive: the card-routing editor is sourced from operations,
+      // so it only knows a subset of instruments. Update the matching rows'
+      // balance column and append new ones; never rewrite the whole tab.
+      const { updated, appended } = await upsertAccountRouting(
+        api,
+        accounts.map((a) => ({
+          sourceChannel: a.sourceChannel,
+          tail: a.tail,
+          balance: a.balance.trim(),
+        })),
+      );
+      setStatus(`Routing saved: ${updated} updated, ${appended} added.`);
     });
   }
 
