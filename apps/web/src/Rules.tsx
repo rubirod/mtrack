@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   assertWritableTab,
   loadClassifyConfig,
@@ -99,6 +99,9 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
   );
 
   const [loading, setLoading] = useState(true);
+  // The operations scan is deferred so opening Rules doesn't block on it; these
+  // two sections show a loading hint until it finishes.
+  const [opsLoading, setOpsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -110,24 +113,32 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
   const [existingCpRules, setExistingCpRules] = useState<CounterpartyRuleRow[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
 
+  // Config inputs that loadOps needs once the page is already on screen.
+  const bankMapRef = useRef<Map<string, string>>(new Map());
+  const merchantRulesRef = useRef<MerchantRuleRow[]>([]);
+  const cpRulesRef = useRef<CounterpartyRuleRow[]>([]);
+
   useEffect(() => {
-    void load();
+    void (async () => {
+      await loadConfig();
+      await loadOps();
+    })();
   }, [api]);
 
-  async function load(): Promise<void> {
+  // Fast path: read only the small config tabs and render immediately. The
+  // heavy `operations` scan is left to loadOps so opening Rules no longer
+  // blocks on reading every transaction.
+  async function loadConfig(): Promise<void> {
     setLoading(true);
     setError(null);
     try {
-      const [opsRows, balanceRows, accountsRows, bankMapRows, merchantRows, cpRows, categoryRows] =
-        await Promise.all([
-          safeRead(api, 'operations!A2:S'),
-          safeRead(api, 'balances!A2:D'),
-          safeRead(api, 'accounts!A2:C'),
-          safeRead(api, 'bank_category_map!A2:B'),
-          safeRead(api, 'merchant_rules!A2:B'),
-          safeRead(api, 'counterparty_rules!A2:G'),
-          safeRead(api, 'categories!A2:A'),
-        ]);
+      const [balanceRows, bankMapRows, merchantRows, cpRows, categoryRows] = await Promise.all([
+        safeRead(api, 'balances!A2:D'),
+        safeRead(api, 'bank_category_map!A2:B'),
+        safeRead(api, 'merchant_rules!A2:B'),
+        safeRead(api, 'counterparty_rules!A2:G'),
+        safeRead(api, 'categories!A2:A'),
+      ]);
 
       const categoryList: string[] = [];
       for (const r of categoryRows) {
@@ -148,44 +159,19 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
       }
       setBalances(balanceList);
 
-      const routingMap = new Map<string, string>();
-      for (const row of accountsRows) {
-        const [sc, tail, balance] = row;
-        if (!sc) continue;
-        routingMap.set(`${sc}|${tail ?? ''}`, balance ?? '');
-      }
-
-      const accountCounts = new Map<string, AccountEntry>();
-      for (const row of opsRows) {
-        const sourceChannel = String(row[16] ?? '');
-        const tail = String(row[2] ?? '');
-        if (!sourceChannel) continue;
-        const key = `${sourceChannel}|${tail}`;
-        const existing = accountCounts.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          accountCounts.set(key, {
-            sourceChannel,
-            tail,
-            count: 1,
-            balance: routingMap.get(key) ?? '',
-          });
-        }
-      }
-      setAccounts([...accountCounts.values()].sort((a, b) => b.count - a.count));
-
       const bankMap = new Map<string, string>();
       for (const row of bankMapRows) {
         const [bank, cat] = row;
         if (bank) bankMap.set(bank, cat ?? '');
       }
+      bankMapRef.current = bankMap;
 
       const merchantRules: MerchantRuleRow[] = [];
       for (const row of merchantRows) {
         const [match, category] = row;
         if (match) merchantRules.push({ match, category: category ?? '' });
       }
+      merchantRulesRef.current = merchantRules;
       setExistingMerchantRules(merchantRules);
 
       const cpRules: CounterpartyRuleRow[] = [];
@@ -203,16 +189,66 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
           field: field ?? 'description',
         });
       }
+      cpRulesRef.current = cpRules;
       setExistingCpRules(cpRules);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Heavy path: scans `operations` for the card-routing instrument list and the
+  // bank-category/merchant breakdown. Reads only the four columns those need —
+  // C account, J description, K bankCategory, Q sourceChannel — via the
+  // contiguous C:Q range, so id and the timestamp columns aren't transferred.
+  async function loadOps(): Promise<void> {
+    setOpsLoading(true);
+    try {
+      const [opsRows, accountsRows] = await Promise.all([
+        safeRead(api, 'operations!C2:Q'),
+        safeRead(api, 'accounts!A2:C'),
+      ]);
+
+      const routingMap = new Map<string, string>();
+      for (const row of accountsRows) {
+        const [sc, tail, balance] = row;
+        if (!sc) continue;
+        routingMap.set(`${sc}|${tail ?? ''}`, balance ?? '');
+      }
+
+      const accountCounts = new Map<string, AccountEntry>();
+      for (const row of opsRows) {
+        const sourceChannel = String(row[14] ?? '');
+        const tail = String(row[0] ?? '');
+        if (!sourceChannel) continue;
+        const key = `${sourceChannel}|${tail}`;
+        const existing = accountCounts.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          accountCounts.set(key, {
+            sourceChannel,
+            tail,
+            count: 1,
+            balance: routingMap.get(key) ?? '',
+          });
+        }
+      }
+      setAccounts([...accountCounts.values()].sort((a, b) => b.count - a.count));
+
+      const bankMap = bankMapRef.current;
+      const merchantRules = merchantRulesRef.current;
+      const cpRules = cpRulesRef.current;
 
       // Build merchant breakdown per bank category.
       const merchantsByBank = new Map<string, Map<string, MerchantEntry>>();
       const bankCounts = new Map<string, BankCategoryEntry>();
 
       for (const row of opsRows) {
-        const bc = String(row[10] ?? '').trim();
+        const bc = String(row[8] ?? '').trim();
         if (!bc) continue;
-        const description = String(row[9] ?? '');
+        const description = String(row[7] ?? '');
         const merchantKey = clusterMerchant(description);
         if (!merchantKey) continue;
 
@@ -292,7 +328,7 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      setOpsLoading(false);
     }
   }
 
@@ -556,7 +592,9 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
 
       <details className="section">
         <summary>Card routing</summary>
-      {accounts.length === 0 ? (
+      {opsLoading ? (
+        <p className="hint">Loading operations…</p>
+      ) : accounts.length === 0 ? (
         <p className="hint">No operations imported yet — import a statement first.</p>
       ) : (
         <>
@@ -609,7 +647,9 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
 
       <details className="section" open>
         <summary>Bank categories</summary>
-      {bankCats.length === 0 ? (
+      {opsLoading ? (
+        <p className="hint">Loading operations…</p>
+      ) : bankCats.length === 0 ? (
         <p className="hint">No bank-provided categories found in operations.</p>
       ) : (
         <>
