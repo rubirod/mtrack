@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  assertWritableTab,
   pushOperations,
   type ConvertedMoneyPro,
   type Row,
@@ -257,6 +258,9 @@ async function mergeByKey(
   if (!existingTabs.has(tab)) {
     await api.ensureTab(tab);
     existingTabs.add(tab);
+  } else {
+    // Bail out instead of appending into a same-named tab the user owns.
+    await assertWritableTab(api, tab, headers);
   }
   const current = await safeRead(api, `${tab}!A2:Z`);
   if (current.length === 0) {

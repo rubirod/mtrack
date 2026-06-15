@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  assertWritableTab,
   loadClassifyConfig,
   reclassifyAll,
   type Row,
@@ -740,7 +741,12 @@ async function rewriteTab(
   rows: Row[],
 ): Promise<void> {
   const tabs = await api.listTabs();
-  if (!tabs.includes(tab)) await api.ensureTab(tab);
+  if (!tabs.includes(tab)) {
+    await api.ensureTab(tab);
+  } else {
+    // Don't clear a same-named tab that the user built for something else.
+    await assertWritableTab(api, tab, headers);
+  }
   await api.clearRange(`${tab}!A:Z`);
   await api.updateValues(`${tab}!A1`, [headers as unknown as Row, ...rows]);
 }
