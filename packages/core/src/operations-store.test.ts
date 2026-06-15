@@ -1,0 +1,160 @@
+import { describe, expect, it } from 'vitest';
+import { pushOperations } from './operations-store';
+import type { ClassifiedOperation } from './types';
+import type { Cell, Row, SheetsAPI, ValueRange } from './sheets-api';
+
+/**
+ * Renders a stored cell the way the Sheets API's default FORMATTED_VALUE does:
+ * numbers and booleans never come back as JS types, only as locale strings.
+ * We deliberately use comma-decimal + NBSP grouping (a non-US locale) so the
+ * test exercises the numeric normalization, not just the boolean one.
+ */
+function render(cell: Cell): string {
+  if (cell === null || cell === undefined) return '';
+  if (typeof cell === 'boolean') return cell ? 'TRUE' : 'FALSE';
+  if (typeof cell === 'number') {
+    const neg = cell < 0 ? '-' : '';
+    const [int, frac] = Math.abs(cell).toString().split('.');
+    const grouped = int!.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return frac ? `${neg}${grouped},${frac}` : `${neg}${grouped}`;
+  }
+  return String(cell);
+}
+
+function colIndex(letters: string): number {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+function parseEnd(s: string): { col: number | null; row: number | null } {
+  const m = /^([A-Z]*)(\d*)$/.exec(s)!;
+  return { col: m[1] ? colIndex(m[1]) : null, row: m[2] ? parseInt(m[2], 10) - 1 : null };
+}
+
+/**
+ * Minimal in-memory SheetsAPI faithful to the one behaviour under test: it
+ * stores raw cell values on write (RAW input) and renders them to strings on
+ * read (formatted output). Enough A1 handling for `pushOperations`.
+ */
+function makeFakeApi(): SheetsAPI {
+  const grid = new Map<string, Cell[][]>();
+
+  const ensure = (tab: string): Cell[][] => {
+    let g = grid.get(tab);
+    if (!g) {
+      g = [];
+      grid.set(tab, g);
+    }
+    return g;
+  };
+
+  const writeAt = (tab: string, row0: number, col0: number, values: Row[]): void => {
+    const g = ensure(tab);
+    values.forEach((r, ri) => {
+      const target = (g[row0 + ri] ??= []);
+      r.forEach((c, ci) => {
+        target[col0 + ci] = c;
+      });
+    });
+  };
+
+  return {
+    async getValues(range: string): Promise<string[][]> {
+      const [tab, ref] = range.split('!');
+      const g = grid.get(tab!);
+      if (!g) return [];
+      const [startRaw, endRaw] = ref!.split(':');
+      const start = parseEnd(startRaw!);
+      const end = endRaw ? parseEnd(endRaw) : start;
+      const r0 = start.row ?? 0;
+      const r1 = end.row ?? g.length - 1;
+      const c0 = start.col ?? 0;
+      const out: string[][] = [];
+      for (let r = r0; r <= r1 && r < g.length; r++) {
+        const row = g[r] ?? [];
+        const c1 = end.col ?? row.length - 1;
+        const cells: string[] = [];
+        for (let c = c0; c <= c1; c++) cells.push(render(row[c] ?? ''));
+        out.push(cells);
+      }
+      return out;
+    },
+    async updateValues(range: string, values: Row[]): Promise<void> {
+      const [tab, ref] = range.split('!');
+      const start = parseEnd(ref!.split(':')[0]!);
+      writeAt(tab!, start.row ?? 0, start.col ?? 0, values);
+    },
+    async appendValues(range: string, values: Row[]): Promise<void> {
+      const [tab, ref] = range.split('!');
+      const start = parseEnd(ref!.split(':')[0]!);
+      const g = ensure(tab!);
+      writeAt(tab!, g.length, start.col ?? 0, values);
+    },
+    async batchUpdateValues(data: ValueRange[]): Promise<void> {
+      for (const { range, values } of data) {
+        const [tab, ref] = range.split('!');
+        const start = parseEnd(ref!.split(':')[0]!);
+        writeAt(tab!, start.row ?? 0, start.col ?? 0, values);
+      }
+    },
+    async listTabs(): Promise<string[]> {
+      return [...grid.keys()];
+    },
+    async ensureTab(title: string): Promise<void> {
+      ensure(title);
+    },
+    async clearRange(): Promise<void> {
+      /* unused here */
+    },
+  };
+}
+
+function op(over: Partial<ClassifiedOperation> = {}): ClassifiedOperation {
+  return {
+    date: '14.03.2026',
+    time: '12:30:00',
+    account: 'Cash',
+    amount: -1234.56,
+    currency: 'RUB',
+    bankCategory: '',
+    mcc: null,
+    description: 'Coffee',
+    kind: 'expense',
+    category: 'Food',
+    counterparty: null,
+    source: 'manual',
+    needsConfirmation: false,
+    excluded: false,
+    sourceId: 'mp:1',
+    ...over,
+  };
+}
+
+describe('pushOperations round-trip idempotency', () => {
+  const ops = (): ClassifiedOperation[] => [
+    op(),
+    op({ sourceId: 'mp:2', amount: 50000, description: 'Salary', kind: 'income', needsConfirmation: true }),
+  ];
+
+  it('reports unchanged (not updated) when re-pushing identical operations', async () => {
+    const api = makeFakeApi();
+    const first = await pushOperations(api, ops(), 'manual');
+    expect(first).toEqual({ appended: 2, updated: 0, unchanged: 0 });
+
+    // The regression: before normalizing the boolean/number round-trip this
+    // came back as { appended: 0, updated: 2, unchanged: 0 }.
+    const second = await pushOperations(api, ops(), 'manual');
+    expect(second).toEqual({ appended: 0, updated: 0, unchanged: 2 });
+  });
+
+  it('still detects a genuine change to an overridable field', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, ops(), 'manual');
+
+    const changed = ops();
+    changed[0] = op({ needsConfirmation: true }); // false -> true, same id
+    const result = await pushOperations(api, changed, 'manual');
+    expect(result).toEqual({ appended: 0, updated: 1, unchanged: 1 });
+  });
+});

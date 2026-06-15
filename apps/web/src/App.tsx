@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { isConfigured, loadSettings, type Settings } from './settings';
 import { LoginScreen } from './Login';
-import { SettingsScreen } from './Settings';
+import { SettingsScreen } from './SettingsScreen';
 import { ImportScreen } from './Import';
 import { RulesScreen } from './Rules';
 

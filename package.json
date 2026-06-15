@@ -9,6 +9,7 @@
   },
   "scripts": {
     "typecheck": "pnpm -r typecheck",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
   }
 }

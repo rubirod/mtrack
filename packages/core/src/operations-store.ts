@@ -22,7 +22,7 @@
 import type { ClassifiedOperation, Operation } from './types';
 import type { ClassifyConfig } from './categories';
 import { classify } from './classify';
-import type { Row, SheetsAPI, ValueRange } from './sheets-api';
+import type { Cell, Row, SheetsAPI, ValueRange } from './sheets-api';
 
 export type SourceChannel = 'csv' | 'pdf' | 'manual';
 
@@ -241,10 +241,46 @@ function mergeRow(existing: Row, fresh: Row): Row {
   });
 }
 
+/**
+ * Columns written as JS numbers/booleans. We send these to Sheets with
+ * `valueInputOption: RAW`, so they're stored as a real number / boolean, but
+ * the API reads them back as locale-formatted strings ("TRUE", "-1 234,56").
+ * Comparing those raw forms with String() flags every row as changed, so a
+ * re-import (or `reclassifyAll`) rewrites the whole sheet and never reports
+ * `unchanged`. Normalize the two non-string columns before comparing.
+ */
+const NUMERIC_COLS: ReadonlySet<Header> = new Set<Header>(['amount']);
+const BOOLEAN_COLS: ReadonlySet<Header> = new Set<Header>(['needsConfirmation', 'excluded']);
+
+function canonicalBool(s: string): string {
+  const l = s.trim().toLowerCase();
+  if (l === 'true') return 'TRUE';
+  if (l === '' || l === 'false') return 'FALSE';
+  return l;
+}
+
+/** Space/comma-tolerant parse so "-1 234,56" and "-1234.56" compare equal. */
+function parseLooseNumber(s: string): number {
+  return parseFloat(s.replace(/\s/g, '').replace(',', '.'));
+}
+
+/** Cell equality that survives a Google Sheets RAW-write / formatted-read round-trip. */
+function cellsEqual(header: Header | undefined, a: Cell | undefined, b: Cell | undefined): boolean {
+  const sa = String(a ?? '').trim();
+  const sb = String(b ?? '').trim();
+  if (header && BOOLEAN_COLS.has(header)) return canonicalBool(sa) === canonicalBool(sb);
+  if (header && NUMERIC_COLS.has(header)) {
+    const na = parseLooseNumber(sa);
+    const nb = parseLooseNumber(sb);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return Math.abs(na - nb) < 1e-9;
+  }
+  return sa === sb;
+}
+
 function rowsEqual(a: Row, b: Row): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (String(a[i] ?? '') !== String(b[i] ?? '')) return false;
+    if (!cellsEqual(HEADERS[i], a[i], b[i])) return false;
   }
   return true;
 }

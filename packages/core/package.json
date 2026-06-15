@@ -14,9 +14,11 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run"
   },
   "devDependencies": {
-    "typescript": "^6.0.0"
+    "typescript": "^6.0.0",
+    "vitest": "^3.2.0"
   }
 }
