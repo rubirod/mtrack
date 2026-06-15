@@ -452,6 +452,15 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
     .filter((b) => b.name.trim() && !b.archived)
     .map((b) => b.name.trim());
 
+  // Card routing can legitimately point at a closed account (a retired card →
+  // an archived balance), so its picker offers archived balances too —
+  // labelled, and listed after the active ones. balanceNames (active only)
+  // still drives the "transfer to balance" picker for new operations.
+  const routingBalances = balances
+    .filter((b) => b.name.trim())
+    .map((b) => ({ name: b.name.trim(), archived: b.archived }))
+    .sort((a, b) => Number(a.archived) - Number(b.archived));
+
   if (loading) {
     return (
       <>
@@ -573,9 +582,9 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
                       }
                     >
                       <option value="">— unrouted —</option>
-                      {balanceNames.map((n) => (
-                        <option key={n} value={n}>
-                          {n}
+                      {routingBalances.map((b) => (
+                        <option key={b.name} value={b.name}>
+                          {b.archived ? `${b.name} (archived)` : b.name}
                         </option>
                       ))}
                     </select>
