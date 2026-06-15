@@ -25,14 +25,19 @@ export async function readHeaderRow(api: SheetsAPI, tab: string): Promise<string
 }
 
 /**
- * A tab is ours to write when it's empty/new, or its header begins with
- * `expected`. Extra trailing columns are allowed — the user may have added
- * their own notes beside the managed columns — but the managed columns must
- * line up. A divergence there means a same-named tab that isn't ours.
+ * A tab is ours to write unless a header cell positively contradicts the
+ * expected layout. Empty/new tabs pass; blank or missing header cells pass
+ * (a hand-made config tab may label only some columns, e.g. `name` without
+ * `parent`); extra trailing columns pass (the user's own notes). Only a
+ * non-blank managed cell that differs — like a `balances` dashboard whose
+ * first column is `accountName` — marks the tab as someone else's.
  */
 export function headerMatches(actual: readonly string[], expected: readonly string[]): boolean {
   if (actual.length === 0) return true;
-  return expected.every((h, i) => actual[i] === h);
+  return expected.every((h, i) => {
+    const cell = actual[i] ?? '';
+    return cell === '' || cell === h;
+  });
 }
 
 /**

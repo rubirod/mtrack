@@ -39,8 +39,14 @@ describe('headerMatches', () => {
     expect(headerMatches(['accountName', 'currency', 'net', 'income'], BALANCES)).toBe(false);
   });
 
-  it('rejects a header shorter than expected', () => {
-    expect(headerMatches(['name', 'currency'], BALANCES)).toBe(false);
+  it('accepts a partial header with managed columns left blank', () => {
+    // A hand-made `categories` tab often labels only `name`, not `parent`.
+    expect(headerMatches(['name'], ['name', 'parent'])).toBe(true);
+    expect(headerMatches(['name', 'currency'], BALANCES)).toBe(true);
+  });
+
+  it('rejects when a present-but-blank column is followed by a real mismatch', () => {
+    expect(headerMatches(['', 'wrong'], ['name', 'parent'])).toBe(false);
   });
 });
 
