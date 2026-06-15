@@ -2,8 +2,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# Local user data — never commit
+# Local user data — never commit. Bank statements and Money Pro backups
+# carry the user's real transactions; keep them out of the repo entirely.
 private/
+*.csv
+*.back
 
 # Env / secrets
 .env
