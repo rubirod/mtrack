@@ -36,6 +36,10 @@ export function BackupImport({ settings }: Props): React.JSX.Element {
   const [withBalances, setWithBalances] = useState(true);
   const [withCategories, setWithCategories] = useState(true);
   const [withOperations, setWithOperations] = useState(true);
+  // Money Pro keeps closed cards/accounts as hidden balances. Their
+  // transactions still import, so off-by-default leaves those cards
+  // unroutable; turn this on to bring the archived balances in too.
+  const [withArchived, setWithArchived] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,12 +55,13 @@ export function BackupImport({ settings }: Props): React.JSX.Element {
         applyConvert(loaded, {
           fromDate: fromDate ? new Date(fromDate) : undefined,
           toDate: toDate ? new Date(toDate) : undefined,
+          includeArchivedBalances: withArchived,
         }),
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [loaded, fromDate, toDate]);
+  }, [loaded, fromDate, toDate, withArchived]);
 
   async function handleFile(file: File): Promise<void> {
     setError(null);
@@ -191,6 +196,12 @@ export function BackupImport({ settings }: Props): React.JSX.Element {
               checked={withBalances}
               onChange={setWithBalances}
               disabled={busy}
+            />
+            <CheckboxRow
+              label="Include archived / hidden balances"
+              checked={withArchived}
+              onChange={setWithArchived}
+              disabled={busy || !withBalances}
             />
             <CheckboxRow
               label={`Categories (${preview?.categories.length ?? 0})`}
