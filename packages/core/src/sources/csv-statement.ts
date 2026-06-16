@@ -56,8 +56,12 @@ function norm(s: string): string {
  *   0  transaction datetime ("DD.MM.YYYY HH:MM:SS")
  *   2  card / account tail (e.g. "*1234")
  *   3  status (only rows with status "OK" are kept)
- *   5  transaction currency
- *   6  posted amount (signed)
+ *   6  settlement amount, signed (what actually posted to the account)
+ *   7  settlement currency — paired with col 6. A foreign-currency purchase
+ *      posts its converted amount here (e.g. a USD buy debits RUB), so taking
+ *      the currency from this column keeps amount and currency consistent.
+ *      (Col 5 holds the original transaction currency, which would mislabel
+ *      the settled amount.)
  *   9  bank-provided category
  *  10  MCC
  *  11  description / merchant
@@ -81,7 +85,7 @@ export function parseCsvStatement(text: string): Operation[] {
       time: time ?? null,
       account: card || null,
       amount: parseAmount(f[6]!),
-      currency: norm(f[5]!),
+      currency: norm(f[7]!),
       bankCategory: norm(f[9]!),
       mcc: norm(f[10]!) || null,
       description: norm(f[11]!),
