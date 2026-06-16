@@ -24,7 +24,13 @@ import type { ClassifyConfig } from './categories';
 import { classify } from './classify';
 import type { Cell, Row, SheetsAPI, ValueRange } from './sheets-api';
 
-export type SourceChannel = 'csv' | 'pdf' | 'manual';
+/**
+ * Where an operation came from. The three built-ins are suggested, but any
+ * string is allowed so the user can namespace per source — e.g. a distinct
+ * label per bank CSV, since card tails (the routing key) collide across banks.
+ * No bank-specific labels live in code; the user supplies them at import time.
+ */
+export type SourceChannel = 'csv' | 'pdf' | 'manual' | (string & {});
 
 const TAB = 'operations';
 const ACCOUNTS_TAB = 'accounts';

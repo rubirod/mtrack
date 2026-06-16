@@ -5,7 +5,6 @@ import {
   parseCsvStatement,
   pushOperations,
   type Operation,
-  type SourceChannel,
 } from '@mtrack/core';
 import type { Settings } from './settings';
 import { createSheetsAPI } from './google';
@@ -25,6 +24,9 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Namespaces a statement by source (default "csv"). A distinct label per bank
+  // keeps card tails from colliding in the routing table.
+  const [channel, setChannel] = useState('csv');
 
   async function handleFile(file: File): Promise<void> {
     setError(null);
@@ -36,12 +38,13 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
       setStatus('Loading rules from the spreadsheet…');
       const config = await loadClassifyConfig(api);
 
-      const { ops, channel } = await parseFile(file);
+      const ops = await parseFile(file);
       setStatus(`Parsed ${ops.length} operations. Classifying…`);
       const classified = ops.map((op) => classify(op, config));
 
-      setStatus('Pushing to operations…');
-      const result = await pushOperations(api, classified, channel);
+      const sourceChannel = channel.trim() || 'csv';
+      setStatus(`Pushing to operations (channel "${sourceChannel}")…`);
+      const result = await pushOperations(api, classified, sourceChannel);
       setStatus(
         `Done. Appended: ${result.appended}, updated: ${result.updated}, unchanged: ${result.unchanged}.`,
       );
@@ -62,6 +65,20 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
       </p>
 
       <div className="card">
+        <label htmlFor="channel">Source channel</label>
+        <input
+          id="channel"
+          type="text"
+          value={channel}
+          placeholder="csv"
+          disabled={busy}
+          onChange={(e) => setChannel(e.target.value)}
+        />
+        <div className="hint">
+          A label for where this statement came from. Use a distinct one per
+          bank so card tails don't collide in routing. Set it before choosing
+          the file.
+        </div>
         <label htmlFor="file">Statement file (CSV)</label>
         <input
           id="file"
@@ -85,16 +102,11 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
   );
 }
 
-interface Parsed {
-  ops: Operation[];
-  channel: SourceChannel;
-}
-
-async function parseFile(file: File): Promise<Parsed> {
+async function parseFile(file: File): Promise<Operation[]> {
   const lower = file.name.toLowerCase();
   if (lower.endsWith('.csv')) {
     const text = await file.text();
-    return { ops: parseCsvStatement(text), channel: 'csv' };
+    return parseCsvStatement(text);
   }
   if (lower.endsWith('.pdf')) {
     throw new Error('PDF support coming via Claude vision (TODO).');
