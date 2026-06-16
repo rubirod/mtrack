@@ -5,8 +5,9 @@ import {
   parseCsvStatement,
   pushOperations,
   reconcile,
-  type AmbiguousItem,
+  type AmbiguityReason,
   type ClassifiedOperation,
+  type ExistingOp,
   type Operation,
 } from '@mtrack/core';
 import type { Settings } from './settings';
@@ -16,21 +17,31 @@ interface Props {
   settings: Settings;
 }
 
+interface ReviewItem {
+  op: ClassifiedOperation;
+  candidates: ExistingOp[];
+  reason: AmbiguityReason;
+  balance: string;
+}
+
 interface Reconciled {
   channel: string;
   parsed: number;
   toAdd: ClassifiedOperation[];
   skipped: number;
-  ambiguous: AmbiguousItem[];
+  review: ReviewItem[];
 }
+
+type Decision = 'add' | 'skip';
 
 /**
  * Statement import.
  *
  * Pick a file (CSV today), parse + classify locally, then reconcile against the
- * operations already in the sheet (Money Pro is the curated master) before
- * writing. Rows the master already has are skipped, unclear ones are surfaced
- * for review, and only genuinely new operations are imported on confirmation.
+ * operations already in the sheet (Money Pro is the curated master). Rows the
+ * master already has are skipped; clearly-new ones are queued to import; unclear
+ * ones are listed for review (default: skip, i.e. trust the master). Nothing is
+ * written until the import is confirmed.
  */
 export function ImportScreen({ settings }: Props): React.JSX.Element {
   const [status, setStatus] = useState<string | null>(null);
@@ -40,11 +51,14 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
   // keeps card tails from colliding in the routing table.
   const [channel, setChannel] = useState('csv');
   const [rec, setRec] = useState<Reconciled | null>(null);
+  // Per-review-item decision; a missing entry means "skip" (trust the master).
+  const [decisions, setDecisions] = useState<Record<number, Decision>>({});
 
   async function handleFile(file: File): Promise<void> {
     setError(null);
     setStatus(null);
     setRec(null);
+    setDecisions({});
     setBusy(true);
     try {
       const api = createSheetsAPI(settings.spreadsheetId);
@@ -77,12 +91,16 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
       }
 
       const result = reconcile(classified, existing, routing, sourceChannel);
+      const review: ReviewItem[] = result.ambiguous.map((a) => ({
+        ...a,
+        balance: routing.get(`${sourceChannel}|${a.op.account ?? ''}`) || '(unrouted)',
+      }));
       setRec({
         channel: sourceChannel,
         parsed: classified.length,
         toAdd: result.toAdd,
         skipped: result.skipped.length,
-        ambiguous: result.ambiguous,
+        review,
       });
       setStatus(null);
     } catch (e) {
@@ -92,18 +110,32 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
     }
   }
 
+  function setAllDecisions(d: Decision): void {
+    if (!rec) return;
+    const next: Record<number, Decision> = {};
+    rec.review.forEach((_, i) => {
+      next[i] = d;
+    });
+    setDecisions(next);
+  }
+
+  const reviewAdds = rec ? rec.review.filter((_, i) => decisions[i] === 'add') : [];
+  const importCount = rec ? rec.toAdd.length + reviewAdds.length : 0;
+
   async function runImport(): Promise<void> {
     if (!rec) return;
     setBusy(true);
     setError(null);
     try {
       const api = createSheetsAPI(settings.spreadsheetId);
-      setStatus(`Importing ${rec.toAdd.length} new operations…`);
-      const result = await pushOperations(api, rec.toAdd, rec.channel);
+      const toImport = [...rec.toAdd, ...reviewAdds.map((r) => r.op)];
+      setStatus(`Importing ${toImport.length} operations…`);
+      const result = await pushOperations(api, toImport, rec.channel);
       setStatus(
         `Done. Appended ${result.appended}, updated ${result.updated}, unchanged ${result.unchanged}.`,
       );
       setRec(null);
+      setDecisions({});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -159,25 +191,78 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
           <ul>
             <li>{rec.parsed} parsed from the file</li>
             <li>{rec.skipped} already in the master (skipped)</li>
-            <li>{rec.ambiguous.length} need review</li>
+            <li>{rec.review.length} to review below</li>
             <li>
-              <strong>{rec.toAdd.length} new to import</strong>
+              <strong>{importCount} to import</strong>
             </li>
           </ul>
-          {rec.ambiguous.length > 0 && (
-            <p className="hint">
-              Review of the {rec.ambiguous.length} ambiguous operations is
-              coming next; for now only the {rec.toAdd.length} clearly-new ones
-              are imported.
-            </p>
-          )}
-          <button
-            className="primary"
-            onClick={runImport}
-            disabled={busy || rec.toAdd.length === 0}
-          >
-            {busy ? 'Working…' : `Import ${rec.toAdd.length} new`}
+          <button className="primary" onClick={runImport} disabled={busy || importCount === 0}>
+            {busy ? 'Working…' : `Import ${importCount}`}
           </button>
+        </div>
+      )}
+
+      {rec && rec.review.length > 0 && (
+        <div className="card">
+          <h2>Review ({rec.review.length})</h2>
+          <p className="hint">
+            These could already be in the master. Default is <em>skip</em> (trust
+            Money Pro); switch to <em>add</em> the ones that are genuinely new.
+          </p>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="secondary" onClick={() => setAllDecisions('skip')} disabled={busy}>
+              All → skip
+            </button>
+            <button className="secondary" onClick={() => setAllDecisions('add')} disabled={busy}>
+              All → add
+            </button>
+          </div>
+          <table className="rules">
+            <thead>
+              <tr>
+                <th>date</th>
+                <th>balance</th>
+                <th>amount</th>
+                <th>description</th>
+                <th>why</th>
+                <th>decision</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rec.review.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.op.date}</td>
+                  <td>{r.balance}</td>
+                  <td>{r.op.amount}</td>
+                  <td>
+                    {r.op.description}
+                    {r.reason === 'multiple-matches' && r.candidates.length > 0 && (
+                      <div className="hint">
+                        master same day: {r.candidates.map((c) => c.amount).join(', ')}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    {r.reason === 'unmatched-transfer'
+                      ? 'looks like transfer'
+                      : `${r.candidates.length} matches`}
+                  </td>
+                  <td>
+                    <select
+                      value={decisions[i] ?? 'skip'}
+                      disabled={busy}
+                      onChange={(e) =>
+                        setDecisions({ ...decisions, [i]: e.target.value as Decision })
+                      }
+                    >
+                      <option value="skip">skip</option>
+                      <option value="add">add</option>
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
