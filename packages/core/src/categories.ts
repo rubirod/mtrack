@@ -14,8 +14,8 @@ import type { Category, OperationKind } from './types';
  *  - `merchant_rules`       — A=match, B=category. Point rules by substring
  *                             of the operation description.
  *  - `counterparty_rules`   — A=match, B=kind, C=label, D=category,
- *                             E=suggest, F=excluded, G=field. Rules for
- *                             transfers, incomes and peer transfers; rule
+ *                             E=suggest, F=excluded, G=field, H=tail. Rules
+ *                             for transfers, incomes and peer transfers; rule
  *                             order matters, first match wins.
  */
 
@@ -41,6 +41,9 @@ export interface CounterpartyRule {
   suggest?: boolean;
   /** true → operation is kept in data but excluded from aggregates. */
   excluded?: boolean;
+  /** When set, the rule only applies to operations on this card tail. Lets a
+   * rule be scoped to one instrument (e.g. exclude cash-outs from one card). */
+  tail?: string;
 }
 
 /**

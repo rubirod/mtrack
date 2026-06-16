@@ -15,7 +15,7 @@ export async function loadClassifyConfig(api: SheetsAPI): Promise<ClassifyConfig
   const [bankMap, merchantRows, counterpartyRows] = await Promise.all([
     safeRead(api, 'bank_category_map!A2:B'),
     safeRead(api, 'merchant_rules!A2:B'),
-    safeRead(api, 'counterparty_rules!A2:G'),
+    safeRead(api, 'counterparty_rules!A2:H'),
   ]);
 
   const bankCategoryMap = new Map<string, Category>();
@@ -32,7 +32,7 @@ export async function loadClassifyConfig(api: SheetsAPI): Promise<ClassifyConfig
 
   const counterpartyRules: CounterpartyRule[] = [];
   for (const row of counterpartyRows) {
-    const [match, kind, label, category, suggest, excluded, field] = row;
+    const [match, kind, label, category, suggest, excluded, field, tail] = row;
     if (!match || !kind || !label) continue;
     if (kind !== 'transfer' && kind !== 'income' && kind !== 'peer') {
       console.warn(`counterparty_rules: unknown kind=${kind} for match=${match}, skipped`);
@@ -46,6 +46,7 @@ export async function loadClassifyConfig(api: SheetsAPI): Promise<ClassifyConfig
       suggest: isTrue(suggest),
       excluded: isTrue(excluded),
       field: parseField(field),
+      tail: tail || undefined,
     });
   }
 

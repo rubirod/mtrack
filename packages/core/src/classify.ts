@@ -24,6 +24,7 @@ export function classify(op: Operation, config: ClassifyConfig): ClassifiedOpera
   const bankLower = bank.toLowerCase();
 
   for (const rule of config.counterpartyRules) {
+    if (rule.tail && (op.account ?? '') !== rule.tail) continue;
     const haystack = rule.field === 'bankCategory' ? bankLower : desc;
     if (haystack.includes(rule.match.toLowerCase())) {
       return {
