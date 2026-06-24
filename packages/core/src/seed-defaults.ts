@@ -79,12 +79,12 @@ const SEED_TABS: TabSpec[] = [
   },
   {
     name: 'merchant_rules',
-    headers: ['match', 'category'],
+    headers: ['match', 'category', 'bankCategory'],
     rows: DEFAULT_MERCHANT_RULES,
   },
   {
     name: 'counterparty_rules',
-    headers: ['match', 'kind', 'label', 'category', 'suggest', 'excluded', 'field'],
+    headers: ['match', 'kind', 'label', 'category', 'suggest', 'excluded', 'field', 'tail'],
     rows: DEFAULT_COUNTERPARTY_RULES,
   },
 ];

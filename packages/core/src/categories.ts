@@ -11,8 +11,9 @@ import type { Category, OperationKind } from './types';
  *  - `bank_category_map`    — A=bankCategory, B=category. Maps the bank's
  *                             category to the user's user category for
  *                             expenses.
- *  - `merchant_rules`       — A=match, B=category. Point rules by substring
- *                             of the operation description.
+ *  - `merchant_rules`       — A=match, B=category, C=bankCategory. Point rules
+ *                             by substring of the operation description,
+ *                             optionally narrowed to one bank category.
  *  - `counterparty_rules`   — A=match, B=kind, C=label, D=category,
  *                             E=suggest, F=excluded, G=field, H=tail. Rules
  *                             for transfers, incomes and peer transfers; rule
@@ -23,6 +24,11 @@ export interface MerchantRule {
   /** Substring of the description, matched case-insensitively. */
   match: string;
   category: Category;
+  /** When set, the rule only applies when the operation's bank category
+   * equals this value (case-insensitive). Lets one merchant string resolve to
+   * different categories per bank bucket — e.g. a park whose food kiosk lands
+   * in "Fastfood" and whose entry ticket lands in "Art". */
+  bankCategory?: string;
 }
 
 export type RuleField = 'description' | 'bankCategory';

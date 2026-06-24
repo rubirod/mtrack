@@ -45,6 +45,22 @@ describe('classify', () => {
     expect(r.category).toBe('Eating out');
   });
 
+  it('narrows a merchant rule to a bank category, splitting one merchant', () => {
+    const cfg = config({
+      merchantRules: [
+        { match: 'park', category: 'Eating out', bankCategory: 'Fastfood' },
+        { match: 'park', category: 'Entertainment', bankCategory: 'Art' },
+      ],
+    });
+
+    expect(classify(op({ description: 'CITY PARK', bankCategory: 'Fastfood' }), cfg).category).toBe(
+      'Eating out',
+    );
+    expect(classify(op({ description: 'CITY PARK', bankCategory: 'Art' }), cfg).category).toBe(
+      'Entertainment',
+    );
+  });
+
   it('applies a tail-scoped rule only to the matching card', () => {
     const cfg = config({
       counterpartyRules: [

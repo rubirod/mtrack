@@ -41,8 +41,14 @@ export function classify(op: Operation, config: ClassifyConfig): ClassifiedOpera
 
   // Expense path. Merchant rules override the bank-category map for cases
   // where the bank's bucket is too generic ("Other", "Misc") but the
-  // merchant is recognisable.
-  const merchantRule = config.merchantRules.find((r) => desc.includes(r.match.toLowerCase()));
+  // merchant is recognisable. A rule may also be narrowed to one bank
+  // category, so the same merchant string can split across our categories
+  // (e.g. a park's food kiosk vs its entry ticket).
+  const merchantRule = config.merchantRules.find(
+    (r) =>
+      desc.includes(r.match.toLowerCase()) &&
+      (!r.bankCategory || bankLower === r.bankCategory.toLowerCase()),
+  );
   const category = merchantRule?.category ?? config.bankCategoryMap.get(bank) ?? null;
   return {
     ...op,

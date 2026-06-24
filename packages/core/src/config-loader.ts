@@ -14,7 +14,7 @@ import type { SheetsAPI } from './sheets-api';
 export async function loadClassifyConfig(api: SheetsAPI): Promise<ClassifyConfig> {
   const [bankMap, merchantRows, counterpartyRows] = await Promise.all([
     safeRead(api, 'bank_category_map!A2:B'),
-    safeRead(api, 'merchant_rules!A2:B'),
+    safeRead(api, 'merchant_rules!A2:C'),
     safeRead(api, 'counterparty_rules!A2:H'),
   ]);
 
@@ -26,8 +26,8 @@ export async function loadClassifyConfig(api: SheetsAPI): Promise<ClassifyConfig
 
   const merchantRules: MerchantRule[] = [];
   for (const row of merchantRows) {
-    const [match, category] = row;
-    if (match && category) merchantRules.push({ match, category });
+    const [match, category, bankCategory] = row;
+    if (match && category) merchantRules.push({ match, category, bankCategory: bankCategory || undefined });
   }
 
   const counterpartyRules: CounterpartyRule[] = [];
