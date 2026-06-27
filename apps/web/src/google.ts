@@ -127,10 +127,16 @@ export class NeedsReauthError extends Error {
 }
 
 // The app subscribes here so it can surface a "Reconnect" prompt the moment a
-// background token refresh fails, without every screen having to handle it.
+// background token refresh fails — and clear it again when one succeeds —
+// without every screen having to handle it.
 let authLost: (() => void) | null = null;
 export function onAuthLost(fn: (() => void) | null): void {
   authLost = fn;
+}
+
+let authRestored: (() => void) | null = null;
+export function onAuthRestored(fn: (() => void) | null): void {
+  authRestored = fn;
 }
 
 /** True when a non-expired token is cached. */
@@ -179,12 +185,14 @@ export async function getAccessToken(): Promise<AccessToken> {
       // that an interactive sign-in is required instead.
       const silent = requestToken('');
       silent.catch(() => {}); // swallow late rejection if the timeout wins
-      return await Promise.race([
+      const tok = await Promise.race([
         silent,
         new Promise<AccessToken>((_, reject) =>
           setTimeout(() => reject(new NeedsReauthError()), 4000),
         ),
       ]);
+      if (authRestored) authRestored();
+      return tok;
     } catch (e) {
       if (authLost) authLost();
       throw e;
@@ -201,7 +209,9 @@ export async function getAccessToken(): Promise<AccessToken> {
  * recovery path when `getAccessToken` reports `NeedsReauthError`.
  */
 export async function signInInteractive(): Promise<AccessToken> {
-  return requestToken('consent');
+  const tok = await requestToken('consent');
+  if (authRestored) authRestored();
+  return tok;
 }
 
 export function signOut(): void {

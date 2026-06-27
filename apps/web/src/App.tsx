@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { isConfigured, loadSettings, type Settings } from './settings';
-import { isSignedIn, onAuthLost, signInInteractive } from './google';
+import { isSignedIn, onAuthLost, onAuthRestored, signInInteractive } from './google';
 import { LoginScreen } from './Login';
 import { SettingsScreen } from './SettingsScreen';
 import { ImportScreen } from './Import';
 import { RulesScreen } from './Rules';
 import { ConfirmScreen } from './ConfirmScreen';
 import { ReceiptScreen } from './ReceiptScreen';
+import { CashScreen } from './CashScreen';
 
-type Tab = 'import' | 'rules' | 'confirm' | 'receipt' | 'settings';
+type Tab = 'import' | 'cash' | 'rules' | 'confirm' | 'receipt' | 'settings';
 
 export function App(): React.JSX.Element {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
@@ -21,7 +22,11 @@ export function App(): React.JSX.Element {
   // wherever the user is.
   useEffect(() => {
     onAuthLost(() => setSignedIn(false));
-    return () => onAuthLost(null);
+    onAuthRestored(() => setSignedIn(true));
+    return () => {
+      onAuthLost(null);
+      onAuthRestored(null);
+    };
   }, []);
 
   async function reconnect(): Promise<void> {
@@ -68,6 +73,7 @@ export function App(): React.JSX.Element {
           </div>
         )}
         {tab === 'import' && <ImportScreen settings={settings} />}
+        {tab === 'cash' && <CashScreen settings={settings} />}
         {tab === 'rules' && <RulesScreen settings={settings} />}
         {tab === 'confirm' && <ConfirmScreen settings={settings} />}
         {tab === 'receipt' && <ReceiptScreen settings={settings} />}
@@ -77,14 +83,17 @@ export function App(): React.JSX.Element {
         <button className={tab === 'import' ? 'tab active' : 'tab'} onClick={() => go('import')}>
           Import
         </button>
-        <button className={tab === 'rules' ? 'tab active' : 'tab'} onClick={() => go('rules')}>
-          Rules
+        <button className={tab === 'cash' ? 'tab active' : 'tab'} onClick={() => go('cash')}>
+          Cash
         </button>
         <button className={tab === 'confirm' ? 'tab active' : 'tab'} onClick={() => go('confirm')}>
           Confirm
         </button>
         <button className={tab === 'receipt' ? 'tab active' : 'tab'} onClick={() => go('receipt')}>
           Receipt
+        </button>
+        <button className={tab === 'rules' ? 'tab active' : 'tab'} onClick={() => go('rules')}>
+          Rules
         </button>
         <button className={tab === 'settings' ? 'tab active' : 'tab'} onClick={() => go('settings')}>
           More

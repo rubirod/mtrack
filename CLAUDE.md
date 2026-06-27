@@ -40,14 +40,23 @@ packages/core/src/
     pdf-statement.ts  StatementDocument → Operation[]
 
 apps/web/src/
-  google.ts        createSheetsAPI() — implements core's SheetsAPI port
+  google.ts        createSheetsAPI() + GIS auth (silent refresh with timeout,
+                   signInInteractive, onAuthLost) — implements SheetsAPI port
   settings.ts      localStorage-backed Settings shape
-  Settings.tsx     first-launch screen + seed-config button
-  Import.tsx       statement import flow
-  App.tsx          tab shell (Import / Confirm / Cash / Receipt / More)
+  Login.tsx        first-launch setup (key, Google sign-in, sheet pick)
+  SettingsScreen.tsx  "More" tab: rotate config, reconnect/sign-out, backup
+  Import.tsx       statement import + reconcile flow
+  Rules.tsx        data-driven rule editor (balances/routing/merchants)
+  ConfirmScreen.tsx  Layer-2 review queue (group, accept, AI, make rule)
+  ReceiptScreen.tsx  Layer-3 receipt vision → per-item operations
+  CashScreen.tsx   manual expense entry + balance adjustment
+  ai.ts            Layer-2 category suggestion + Layer-3 receipt vision
+  merchants.ts     clusterMerchant() — description → stable merchant key
+  App.tsx          tab shell (Import / Cash / Confirm / Receipt / Rules / More)
 ```
 
-The `Confirm`, `Cash`, `Receipt` tabs are placeholders today.
+All tabs are implemented: Import, Cash, Confirm (Layer 2), Receipt (Layer 3),
+Rules, More.
 
 ## Key conventions
 
@@ -121,27 +130,27 @@ normal additive commits.
 - `pnpm typecheck` and `pnpm --filter @mtrack/web build` green.
 - No `.env`, no `private/`, no real statements committed.
 
+## Done (was deferred)
+
+- **Layer 2** — `ConfirmScreen`: review queue for uncategorised / needs-a-tap
+  ops, grouped by merchant, with accept / AI-suggest (`ai.ts`) / make-rule, and
+  auto-split of a merchant across bank categories.
+- **Layer 3** — `ReceiptScreen` + `parseReceipt`: receipt photo → Claude vision
+  → per-item operations.
+- **Cash tab** — `CashScreen`: manual expense entry + balance adjustment (enters
+  a desired balance, appends an op for the diff, category "Balance adjustment").
+- **Backup import** — `BackupImport.tsx` + `sources/moneypro.ts`: Money Pro
+  `.back` migration (sql.js in-browser).
+- **In-app re-auth** — expired Google token surfaces a "Reconnect" banner;
+  `signInInteractive` opens the consent popup on a gesture.
+
 ## What's deferred
 
-- Layer 2 (AI category suggestion for unmatched merchants) and Layer 3
-  (Claude vision splitting a receipt across categories).
 - PDF statement parsing — `parsePdfStatement` already maps
   `StatementDocument → Operation[]`; what's missing is the PWA-side
   vision call that turns a PDF file into a `StatementDocument`.
 - `apps/server/` — would consume the same `@mtrack/core` for IMAP /
   Telegram / cron channels.
-- **Cash tab** — manual expense entry. Should also support *balance
-  adjustment*: user enters a desired balance, the app inserts an operation
-  for the diff (category "Balance adjustment"). This is just sugar over a
-  normal manual operation, the way Money Pro does it.
-- **Backup import** — one-off migration from a Money Pro `.back` file
-  (custom `name\nlength\nbytes` container wrapping a SQLite db). Imports
-  balances, categories (with parent), and transactions. Money Pro model:
-  `transactions` (date = Unix epoch, sum always positive), sign from
-  `category.flowType` (1=income, 2=expense), `transactionType=2` = transfer
-  with `secondCashFlowPrimaryKey` = destination balance, `splitTransaction`
-  links one txn to one-or-more categories. Parse SQLite in-browser via
-  lazily-loaded sql.js (WASM), push through `pushOperations`.
 
 ## Mobile latency for manual entry — design rule
 
@@ -150,16 +159,15 @@ idempotency by id-collision detection. That's fine for batch imports (rare,
 overlapping CSV/PDF/backup files) but **unacceptable for single manual ops
 on mobile** once the sheet grows beyond ~10K rows.
 
-When implementing the **Cash** tab and **Confirm** tab, do NOT route through
-`pushOperations`. Add a separate fast path:
+The **Cash**, **Confirm** and **Receipt** tabs do NOT route through
+`pushOperations`. They use the fast path in `operations-store.ts`:
 
-- `appendManualOperation(api, op)` — loads only `accounts` (tiny), assigns a
-  unique `sourceId` (timestamp/uuid), `appendValues` once. Constant time,
-  no read of `operations`.
-- For Confirm-tap (updating an existing row's `category` / `kind` /
-  `manualOverride`), use `updateOperationFields(api, id, patch)` — read
-  only the row with that id (via `getValues` of one column range to find
-  rowNum, then update that single row).
+- `appendManualOperations(api, ops, accountName, channel)` (and the singular
+  `appendManualOperation`) — `appendValues` once, never reads `operations`.
+  `accountName` is the picked balance, written verbatim. Receipt items use it.
+- `updateOperationFields(api, id, patch, {pin})` — Confirm-tap edits: reads
+  only the id column to find the row, then that one row, then writes it.
+  `applyOperationPatch` is the pure row-merge it (and batch writers) reuse.
 
 Idempotency for manual ops is the user's responsibility (disable submit
 button on click); they don't need collision-checked id space. Keep this
