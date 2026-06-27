@@ -408,6 +408,7 @@ function buildBlocks(
   rows.forEach((row, idx) => {
     const id = row[COL.id];
     if (!id) return;
+    if (isTrue(row[COL.excluded])) return; // out of aggregates → out of the queue
     const category = String(row[COL.category] ?? '');
     const kind = String(row[COL.kind] ?? '');
     const needsConfirm = isTrue(row[COL.needsConfirmation]);
