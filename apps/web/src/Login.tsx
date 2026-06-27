@@ -2,10 +2,10 @@ import { useState } from 'react';
 import type { Settings } from './settings';
 import { saveSettings } from './settings';
 import {
-  getAccessToken,
   getSpreadsheetMeta,
   isClientIdConfigured,
   listSpreadsheets,
+  signInInteractive,
   type SpreadsheetMeta,
 } from './google';
 
@@ -41,7 +41,7 @@ export function LoginScreen({ onSaved }: Props): React.JSX.Element {
     setError(null);
     setBusy(true);
     try {
-      await getAccessToken();
+      await signInInteractive();
       const list = await listSpreadsheets();
       setSheets(list);
     } catch (e) {

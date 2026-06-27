@@ -5,7 +5,9 @@ import { saveSettings } from './settings';
 import {
   createSheetsAPI,
   getSpreadsheetMeta,
+  isSignedIn,
   listSpreadsheets,
+  signInInteractive,
   signOut,
   type SpreadsheetMeta,
 } from './google';
@@ -32,8 +34,23 @@ export function SettingsScreen({ settings, onChanged }: Props): React.JSX.Elemen
   const [sheets, setSheets] = useState<SpreadsheetMeta[] | null>(null);
   const [pasteInput, setPasteInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+
+  async function reconnect(): Promise<void> {
+    setReconnecting(true);
+    setError(null);
+    setStatus(null);
+    try {
+      await signInInteractive();
+      setStatus('Reconnected to Google.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReconnecting(false);
+    }
+  }
 
   const dirty =
     anthropicKey !== settings.anthropicKey || picked.id !== settings.spreadsheetId;
@@ -183,6 +200,20 @@ export function SettingsScreen({ settings, onChanged }: Props): React.JSX.Elemen
 
       <hr style={{ margin: '32px 0', border: 0, borderTop: '1px solid var(--border)' }} />
       <h2>Session</h2>
+      <p className="hint">
+        {isSignedIn()
+          ? 'Connected to Google.'
+          : 'Not connected — reconnect to read or write the sheet.'}
+      </p>
+
+      <button
+        className="primary"
+        style={{ marginTop: 8 }}
+        onClick={() => void reconnect()}
+        disabled={reconnecting}
+      >
+        {reconnecting ? 'Connecting…' : 'Reconnect Google'}
+      </button>
 
       <button
         className="secondary"

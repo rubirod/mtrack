@@ -117,15 +117,37 @@ export function currentToken(): AccessToken | null {
   return cached;
 }
 
-export async function getAccessToken(): Promise<AccessToken> {
-  const t = currentToken();
-  if (t) return t;
-  if (inflight) return inflight;
+/** Thrown when no valid token is cached and a silent refresh can't get one
+ *  without user interaction — the caller should prompt an interactive sign-in. */
+export class NeedsReauthError extends Error {
+  constructor() {
+    super('Google sign-in required');
+    this.name = 'NeedsReauthError';
+  }
+}
+
+// The app subscribes here so it can surface a "Reconnect" prompt the moment a
+// background token refresh fails, without every screen having to handle it.
+let authLost: (() => void) | null = null;
+export function onAuthLost(fn: (() => void) | null): void {
+  authLost = fn;
+}
+
+/** True when a non-expired token is cached. */
+export function isSignedIn(): boolean {
+  return currentToken() !== null;
+}
+
+/**
+ * Requests a token from GIS. `prompt=''` is a silent refresh (uses the existing
+ * Google session via a hidden iframe); `prompt='consent'` always opens the
+ * account/consent popup and so must be called from a user gesture.
+ */
+function requestToken(prompt: '' | 'consent'): Promise<AccessToken> {
   const clientId = requireClientId();
-  inflight = (async () => {
-    try {
-      await loadGisScript();
-      return await new Promise<AccessToken>((resolve, reject) => {
+  return loadGisScript().then(
+    () =>
+      new Promise<AccessToken>((resolve, reject) => {
         const client = google.accounts.oauth2.initTokenClient({
           client_id: clientId,
           scope: SCOPES,
@@ -140,10 +162,32 @@ export async function getAccessToken(): Promise<AccessToken> {
             resolve(cached);
           },
         });
-        // Empty prompt lets GIS use the existing Google session silently when
-        // possible, only opening a popup if the user really hasn't consented yet.
-        client.requestAccessToken({ prompt: '' });
-      });
+        client.requestAccessToken({ prompt });
+      }),
+  );
+}
+
+export async function getAccessToken(): Promise<AccessToken> {
+  const t = currentToken();
+  if (t) return t;
+  if (inflight) return inflight;
+  inflight = (async () => {
+    try {
+      // Silent refresh, but bounded: GIS never calls back when it silently
+      // needs a popup it can't open (no gesture, or blocked third-party
+      // cookies), which used to hang the whole screen. Time out and signal
+      // that an interactive sign-in is required instead.
+      const silent = requestToken('');
+      silent.catch(() => {}); // swallow late rejection if the timeout wins
+      return await Promise.race([
+        silent,
+        new Promise<AccessToken>((_, reject) =>
+          setTimeout(() => reject(new NeedsReauthError()), 4000),
+        ),
+      ]);
+    } catch (e) {
+      if (authLost) authLost();
+      throw e;
     } finally {
       inflight = null;
     }
@@ -151,6 +195,14 @@ export async function getAccessToken(): Promise<AccessToken> {
   return inflight;
 }
 
+/**
+ * Interactive sign-in. Opens the consent popup, so it MUST be called from a
+ * user gesture (button click) or the browser blocks the popup. This is the
+ * recovery path when `getAccessToken` reports `NeedsReauthError`.
+ */
+export async function signInInteractive(): Promise<AccessToken> {
+  return requestToken('consent');
+}
 
 export function signOut(): void {
   cached = null;
