@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pushOperations, reclassifyAll } from './operations-store';
+import { applyOperationPatch, pushOperations, reclassifyAll, updateOperationFields } from './operations-store';
 import type { ClassifiedOperation } from './types';
 import type { ClassifyConfig } from './categories';
 import type { Cell, Row, SheetsAPI, ValueRange } from './sheets-api';
@@ -10,6 +10,7 @@ const EMPTY_CONFIG: ClassifyConfig = {
   counterpartyRules: [],
 };
 const CATEGORY_COL = 5; // id,occurredAt,account,accountName,kind,category,…
+const OVERRIDE_COL = 15;
 
 /**
  * Renders a stored cell the way the Sheets API's default FORMATTED_VALUE does:
@@ -220,5 +221,34 @@ describe('reclassifyAll non-destructive mode', () => {
 
     const rows = await api.getValues('operations!A2:S');
     expect(rows[0]![CATEGORY_COL]).toBe('Eating out');
+  });
+});
+
+describe('updateOperationFields single-op fast path', () => {
+  it('patches one row by id and pins manualOverride', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, [op({ category: '', description: 'X' })], 'manual');
+    const id = (await api.getValues('operations!A2:A'))[0]![0]!;
+
+    const ok = await updateOperationFields(api, id, { category: 'Food' }, { pin: ['category'] });
+    expect(ok).toBe(true);
+
+    const rows = await api.getValues('operations!A2:S');
+    expect(rows[0]![CATEGORY_COL]).toBe('Food');
+    expect(rows[0]![OVERRIDE_COL]).toContain('category');
+  });
+
+  it('returns false for an unknown id', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, [op()], 'manual');
+    expect(await updateOperationFields(api, 'no-such-id', { category: 'X' })).toBe(false);
+  });
+
+  it('applyOperationPatch is pure and merges manualOverride', () => {
+    const row = ['id1', '', '', '', 'expense', 'Old', '', -1, 'RUB', 'X', '', '', 'rule', false, false, 'kind', 'csv', '', ''];
+    const out = applyOperationPatch(row, { category: 'New' }, ['category']);
+    expect(out[CATEGORY_COL]).toBe('New');
+    expect(out[OVERRIDE_COL]).toBe('kind,category');
+    expect(row[CATEGORY_COL]).toBe('Old'); // input untouched
   });
 });

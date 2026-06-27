@@ -4,6 +4,7 @@ import { LoginScreen } from './Login';
 import { SettingsScreen } from './SettingsScreen';
 import { ImportScreen } from './Import';
 import { RulesScreen } from './Rules';
+import { ConfirmScreen } from './ConfirmScreen';
 
 type Tab = 'import' | 'rules' | 'confirm' | 'receipt' | 'settings';
 
@@ -20,7 +21,7 @@ export function App(): React.JSX.Element {
       <div className="app">
         {tab === 'import' && <ImportScreen settings={settings} />}
         {tab === 'rules' && <RulesScreen settings={settings} />}
-        {tab === 'confirm' && <ConfirmPlaceholder />}
+        {tab === 'confirm' && <ConfirmScreen settings={settings} />}
         {tab === 'receipt' && <ReceiptPlaceholder />}
         {tab === 'settings' && <SettingsScreen settings={settings} onChanged={setSettings} />}
       </div>
@@ -41,22 +42,6 @@ export function App(): React.JSX.Element {
           More
         </button>
       </nav>
-    </>
-  );
-}
-
-function ConfirmPlaceholder(): React.JSX.Element {
-  return (
-    <>
-      <h1>Confirm</h1>
-      <p className="muted">
-        Feed of operations with needsConfirmation=TRUE: rules that suggested a
-        category but want a tap. Pick the category, push back to the sheet,
-        flag manualOverride.
-      </p>
-      <div className="card">
-        <em className="muted">TODO: load operations!A:S, filter needsConfirmation=TRUE.</em>
-      </div>
     </>
   );
 }

@@ -270,3 +270,22 @@ table.rules button.secondary { width: auto; padding: 8px 14px; }
 .section[open] > summary::before {
   content: '▾';
 }
+
+/* Confirm tab: nested sub-cards (bank-category split), done state, badge. */
+.sub {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+}
+.card.split { border-color: var(--accent); }
+.card.done, .sub.done { color: var(--fg-dim); font-size: 13px; }
+.badge {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}

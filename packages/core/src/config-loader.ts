@@ -53,6 +53,17 @@ export async function loadClassifyConfig(api: SheetsAPI): Promise<ClassifyConfig
   return { bankCategoryMap, merchantRules, counterpartyRules };
 }
 
+/**
+ * Appends one rule to the `merchant_rules` tab (match, category, optional
+ * bankCategory). Used by the Confirm tab's "make a rule" action. A bare append
+ * — duplicates are harmless because `classify` takes the first match.
+ */
+export async function appendMerchantRule(api: SheetsAPI, rule: MerchantRule): Promise<void> {
+  await api.appendValues('merchant_rules!A:C', [
+    [rule.match, rule.category, rule.bankCategory ?? ''],
+  ]);
+}
+
 async function safeRead(api: SheetsAPI, range: string): Promise<string[][]> {
   try {
     return await api.getValues(range);

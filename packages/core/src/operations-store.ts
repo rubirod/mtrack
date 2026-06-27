@@ -59,6 +59,21 @@ const HEADERS = [
 
 type Header = (typeof HEADERS)[number];
 
+/** The `operations` tab column order, exported so screens can index rows. */
+export const OPERATION_HEADERS = HEADERS;
+
+/** Fields a user (or the AI layer) may set on an existing operation row. */
+export type EditableField =
+  | 'kind'
+  | 'category'
+  | 'counterparty'
+  | 'accountName'
+  | 'source'
+  | 'needsConfirmation'
+  | 'excluded';
+
+export type OperationPatch = Partial<Record<EditableField, Cell>>;
+
 const OVERRIDABLE: ReadonlySet<Header> = new Set<Header>([
   'kind',
   'category',
@@ -491,4 +506,53 @@ export async function reclassifyAll(
   }
 
   return { appended: 0, updated: toUpdate.length, unchanged, preserved };
+}
+
+/**
+ * Merge a field patch into an existing `operations` row. Pure: returns a new
+ * row, bumps `updatedAt`, and optionally pins fields into `manualOverride` so
+ * later imports never overwrite them. The screen building a Confirm-tab batch
+ * already holds the rows in memory, so it can patch them and send one
+ * `batchUpdateValues` without re-reading the sheet.
+ */
+export function applyOperationPatch(
+  existingRow: Row,
+  patch: OperationPatch,
+  pin: readonly EditableField[] = [],
+): Row {
+  const row = padRow([...existingRow]);
+  for (const key of Object.keys(patch) as EditableField[]) {
+    const i = HEADERS.indexOf(key);
+    if (i >= 0) row[i] = patch[key] ?? '';
+  }
+  if (pin.length > 0) {
+    const oIdx = HEADERS.indexOf('manualOverride');
+    const set = parseOverride(String(row[oIdx] ?? ''));
+    for (const f of pin) set.add(f);
+    row[oIdx] = [...set].join(',');
+  }
+  row[HEADERS.indexOf('updatedAt')] = new Date().toISOString();
+  return row;
+}
+
+/**
+ * Single-operation fast path for interactive edits (Confirm tap, Cash entry).
+ * Reads only the id column to locate the row, then that one row — never the
+ * whole `operations` tab — so it stays constant-time as the sheet grows. See
+ * the mobile-latency rule in CLAUDE.md. Returns false if no row has that id.
+ */
+export async function updateOperationFields(
+  api: SheetsAPI,
+  id: string,
+  patch: OperationPatch,
+  opts: { pin?: readonly EditableField[] } = {},
+): Promise<boolean> {
+  const ids = await api.getValues(`${TAB}!A2:A`);
+  const idx = ids.findIndex((r) => r[0] === id);
+  if (idx < 0) return false;
+  const rowNum = idx + 2;
+  const cur = await api.getValues(`${TAB}!A${rowNum}:${LAST_COL}${rowNum}`);
+  const row = applyOperationPatch(cur[0] ?? [], patch, opts.pin ?? []);
+  await api.updateValues(`${TAB}!A${rowNum}:${LAST_COL}${rowNum}`, [row]);
+  return true;
 }
