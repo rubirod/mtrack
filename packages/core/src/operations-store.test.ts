@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { pushOperations } from './operations-store';
+import { pushOperations, reclassifyAll } from './operations-store';
 import type { ClassifiedOperation } from './types';
+import type { ClassifyConfig } from './categories';
 import type { Cell, Row, SheetsAPI, ValueRange } from './sheets-api';
+
+const EMPTY_CONFIG: ClassifyConfig = {
+  bankCategoryMap: new Map(),
+  merchantRules: [],
+  counterpartyRules: [],
+};
+const CATEGORY_COL = 5; // id,occurredAt,account,accountName,kind,category,…
 
 /**
  * Renders a stored cell the way the Sheets API's default FORMATTED_VALUE does:
@@ -156,5 +164,61 @@ describe('pushOperations round-trip idempotency', () => {
     changed[0] = op({ needsConfirmation: true }); // false -> true, same id
     const result = await pushOperations(api, changed, 'manual');
     expect(result).toEqual({ appended: 0, updated: 1, unchanged: 1 });
+  });
+});
+
+describe('reclassifyAll non-destructive mode', () => {
+  // A curated row a rule can't reproduce: 'Food' category, blank bankCategory,
+  // a description no rule matches. Mirrors a Money Pro master operation.
+  const curated = (): ClassifiedOperation => op({ category: 'Food', description: 'Coffee' });
+
+  it('keeps a curated category when no rule matches (preserveNonEmpty)', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, [curated()], 'manual');
+
+    const res = await reclassifyAll(api, EMPTY_CONFIG, { preserveNonEmpty: true });
+    expect(res.preserved).toBe(1);
+
+    const rows = await api.getValues('operations!A2:S');
+    expect(rows[0]![CATEGORY_COL]).toBe('Food');
+  });
+
+  it('blanks the category without the guard (destructive default)', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, [curated()], 'manual');
+
+    const res = await reclassifyAll(api, EMPTY_CONFIG);
+    expect(res.updated).toBe(1);
+    expect(res.preserved).toBe(0);
+
+    const rows = await api.getValues('operations!A2:S');
+    expect(rows[0]![CATEGORY_COL]).toBe('');
+  });
+
+  it('dryRun reports the change but writes nothing', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, [curated()], 'manual');
+
+    const res = await reclassifyAll(api, EMPTY_CONFIG, { dryRun: true });
+    expect(res.updated).toBe(1);
+
+    const rows = await api.getValues('operations!A2:S');
+    expect(rows[0]![CATEGORY_COL]).toBe('Food'); // untouched on disk
+  });
+
+  it('a matching merchant rule still overwrites the old category', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, [curated()], 'manual');
+
+    const config: ClassifyConfig = {
+      bankCategoryMap: new Map(),
+      merchantRules: [{ match: 'coffee', category: 'Eating out' }],
+      counterpartyRules: [],
+    };
+    const res = await reclassifyAll(api, config, { preserveNonEmpty: true });
+    expect(res.updated).toBe(1);
+
+    const rows = await api.getValues('operations!A2:S');
+    expect(rows[0]![CATEGORY_COL]).toBe('Eating out');
   });
 });

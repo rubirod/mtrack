@@ -455,8 +455,11 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
   async function applyToOperations(): Promise<void> {
     await withBusy(async () => {
       const config = await loadClassifyConfig(api);
-      const result = await reclassifyAll(api, config);
-      setStatus(`Re-classified. Updated: ${result.updated}, unchanged: ${result.unchanged}.`);
+      const result = await reclassifyAll(api, config, { preserveNonEmpty: true });
+      setStatus(
+        `Re-classified. Updated: ${result.updated}, unchanged: ${result.unchanged}, ` +
+          `kept (not blanked): ${result.preserved}.`,
+      );
     });
   }
 

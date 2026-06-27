@@ -303,6 +303,28 @@ export interface PushResult {
   unchanged: number;
 }
 
+export interface ReclassifyOptions {
+  /**
+   * Never overwrite a non-empty classification field with an empty one. Rules
+   * that produce a value still update the row; rules that produce nothing leave
+   * the existing value intact. Protects curated categories (e.g. from a Money
+   * Pro import) on rows that no current rule matches.
+   */
+  preserveNonEmpty?: boolean;
+  /** Compute the changes but write nothing; the result reports what would happen. */
+  dryRun?: boolean;
+}
+
+export interface ReclassifyResult extends PushResult {
+  /** Rows where `preserveNonEmpty` kept at least one field that the recomputed
+   * classification would otherwise have blanked. */
+  preserved: number;
+}
+
+function isEmptyCell(v: Cell | undefined): boolean {
+  return String(v ?? '').trim() === '';
+}
+
 /** Idempotently upserts classified operations into the spreadsheet. */
 export async function pushOperations(
   api: SheetsAPI,
@@ -376,7 +398,9 @@ export async function pushOperations(
 export async function reclassifyAll(
   api: SheetsAPI,
   config: ClassifyConfig,
-): Promise<PushResult> {
+  opts: ReclassifyOptions = {},
+): Promise<ReclassifyResult> {
+  const { preserveNonEmpty = false, dryRun = false } = opts;
   await ensureOperationsTab(api);
   const accounts = await loadAccounts(api);
 
@@ -398,6 +422,7 @@ export async function reclassifyAll(
   const now = new Date().toISOString();
   const toUpdate: Array<{ rowNum: number; row: Row }> = [];
   let unchanged = 0;
+  let preserved = 0;
 
   existingRows.forEach((rawRow, idx) => {
     const existingRow = padRow(rawRow);
@@ -428,6 +453,22 @@ export async function reclassifyAll(
     const fresh = buildRow(classified, id, sourceChannel, accountName, createdAt, now);
     const merged = mergeRow(existingRow, fresh);
 
+    // Non-destructive mode: a rule that yields nothing must not blank a value
+    // the row already has (e.g. a curated Money Pro category on a merchant no
+    // rule matches). Restore the existing value wherever the recompute emptied
+    // a previously non-empty classification field.
+    if (preserveNonEmpty) {
+      let kept = false;
+      for (const h of OVERRIDABLE) {
+        const i = HEADERS.indexOf(h);
+        if (isEmptyCell(merged[i]) && !isEmptyCell(existingRow[i])) {
+          merged[i] = existingRow[i] ?? '';
+          kept = true;
+        }
+      }
+      if (kept) preserved++;
+    }
+
     if (rowsEqual(existingRow, merged)) {
       unchanged++;
       return;
@@ -436,7 +477,7 @@ export async function reclassifyAll(
     toUpdate.push({ rowNum: idx + 2, row: merged });
   });
 
-  if (toUpdate.length > 0) {
+  if (!dryRun && toUpdate.length > 0) {
     // Sheets caps batchUpdate payload; chunk to keep requests small.
     const CHUNK = 200;
     for (let i = 0; i < toUpdate.length; i += CHUNK) {
@@ -449,5 +490,5 @@ export async function reclassifyAll(
     }
   }
 
-  return { appended: 0, updated: toUpdate.length, unchanged };
+  return { appended: 0, updated: toUpdate.length, unchanged, preserved };
 }
