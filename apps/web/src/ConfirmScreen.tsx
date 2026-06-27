@@ -85,6 +85,9 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
   const [filter, setFilter] = useState<Filter>('uncategorized');
   const [categories, setCategories] = useState<string[]>([]);
   const [blocks, setBlocks] = useState<Block[]>([]);
+  // Operations with no description can't be matched by a rule or the AI — only
+  // accepted by hand. Hidden by default so the queue stays actionable.
+  const [showNoDesc, setShowNoDesc] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,8 +227,13 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
     }
   }
 
-  const allGroups = blocks.flatMap((b) => (b.kind === 'single' ? [b.group] : b.groups));
-  const remaining = allGroups.filter((g) => !g.done);
+  const noDescOps = blocks
+    .filter(isNoDescBlock)
+    .reduce((n, b) => n + (b.kind === 'single' && !b.group.done ? b.group.items.length : 0), 0);
+  const visibleBlocks = showNoDesc ? blocks : blocks.filter((b) => !isNoDescBlock(b));
+  const remaining = visibleBlocks
+    .flatMap((b) => (b.kind === 'single' ? [b.group] : b.groups))
+    .filter((g) => !g.done);
   const remOps = remaining.reduce((n, g) => n + g.items.length, 0);
 
   return (
@@ -244,7 +252,17 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
         </select>
       </div>
 
-      {!loading && remaining.length > 0 && (
+      {!loading && noDescOps > 0 && (
+        <p className="hint">
+          {noDescOps} operation{noDescOps === 1 ? '' : 's'} without a description (rule/AI can't
+          help — accept by hand).{' '}
+          <a href="#" onClick={(e) => { e.preventDefault(); setShowNoDesc((v) => !v); }}>
+            {showNoDesc ? 'hide' : 'show'}
+          </a>
+        </p>
+      )}
+
+      {!loading && remaining.some((g) => !g.picked && g.merchant) && (
         <button
           className="secondary"
           disabled={busy}
@@ -255,7 +273,7 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
         </button>
       )}
 
-      {blocks.map((b) =>
+      {visibleBlocks.map((b) =>
         b.kind === 'single' ? (
           <GroupCard
             key={b.group.key}
@@ -447,6 +465,10 @@ function buildBlocks(
   // Most-impactful merchants first.
   blocks.sort((a, b) => blockOps(b) - blockOps(a));
   return blocks;
+}
+
+function isNoDescBlock(b: Block): boolean {
+  return b.kind === 'single' && b.group.merchant === '';
 }
 
 function blockOps(b: Block): number {
