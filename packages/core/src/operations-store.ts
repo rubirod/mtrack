@@ -536,6 +536,43 @@ export function applyOperationPatch(
 }
 
 /**
+ * Fast append path for interactive entry (Receipt items, Cash). Appends rows in
+ * a single call and never reads the whole `operations` tab — so it stays
+ * constant-time on a large sheet (see the mobile-latency rule in CLAUDE.md).
+ *
+ * Idempotency is the caller's job: pass a unique `sourceId` per op (it's mixed
+ * into the row id) and disable the submit button on click. `accountName` is the
+ * canonical balance the user picked; it's written verbatim, bypassing the
+ * instrument-routing lookup that batch imports use.
+ */
+export async function appendManualOperations(
+  api: SheetsAPI,
+  ops: ClassifiedOperation[],
+  accountName: string,
+  sourceChannel: SourceChannel = 'manual',
+): Promise<number> {
+  if (ops.length === 0) return 0;
+  const now = new Date().toISOString();
+  const rows: Row[] = [];
+  for (const op of ops) {
+    const id = await operationId(op, sourceChannel);
+    rows.push(buildRow(op, id, sourceChannel, accountName, now, now));
+  }
+  await api.appendValues(RANGE_FULL, rows);
+  return rows.length;
+}
+
+/** Single-op convenience over {@link appendManualOperations}. */
+export async function appendManualOperation(
+  api: SheetsAPI,
+  op: ClassifiedOperation,
+  accountName: string,
+  sourceChannel: SourceChannel = 'manual',
+): Promise<void> {
+  await appendManualOperations(api, [op], accountName, sourceChannel);
+}
+
+/**
  * Single-operation fast path for interactive edits (Confirm tap, Cash entry).
  * Reads only the id column to locate the row, then that one row — never the
  * whole `operations` tab — so it stays constant-time as the sheet grows. See

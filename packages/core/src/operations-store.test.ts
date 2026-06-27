@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { applyOperationPatch, pushOperations, reclassifyAll, updateOperationFields } from './operations-store';
+import {
+  appendManualOperations,
+  applyOperationPatch,
+  pushOperations,
+  reclassifyAll,
+  updateOperationFields,
+} from './operations-store';
 import type { ClassifiedOperation } from './types';
 import type { ClassifyConfig } from './categories';
 import type { Cell, Row, SheetsAPI, ValueRange } from './sheets-api';
@@ -221,6 +227,28 @@ describe('reclassifyAll non-destructive mode', () => {
 
     const rows = await api.getValues('operations!A2:S');
     expect(rows[0]![CATEGORY_COL]).toBe('Eating out');
+  });
+});
+
+describe('appendManualOperations fast path', () => {
+  it('appends each op with the picked balance and distinct ids', async () => {
+    const api = makeFakeApi();
+    const ops = [
+      op({ sourceId: 'receipt:1:0', category: 'Food', description: 'Bread', source: 'ai' }),
+      op({ sourceId: 'receipt:1:1', category: 'Drinks', description: 'Juice', source: 'ai' }),
+    ];
+    const n = await appendManualOperations(api, ops, 'IDR Cash', 'receipt');
+    expect(n).toBe(2);
+
+    const rows = await api.getValues('operations!A1:S');
+    const ACCOUNT_NAME = 3;
+    const SOURCE = 12;
+    const SOURCE_CHANNEL = 16;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]![ACCOUNT_NAME]).toBe('IDR Cash');
+    expect(rows[0]![SOURCE]).toBe('ai');
+    expect(rows[0]![SOURCE_CHANNEL]).toBe('receipt');
+    expect(rows[0]![0]).not.toBe(rows[1]![0]); // distinct ids from distinct sourceIds
   });
 });
 
