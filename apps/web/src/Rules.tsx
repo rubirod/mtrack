@@ -10,6 +10,7 @@ import {
 import type { Settings } from './settings';
 import { createSheetsAPI } from './google';
 import { clusterMerchant } from './merchants';
+import { CategoryMaintenance } from './CategoryMaintenance';
 
 /**
  * Rules tab — data-driven editor for balances, instrument routing,
@@ -750,6 +751,22 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
           </div>
         </>
       )}
+      </details>
+
+      <details className="section">
+        <summary>Category maintenance</summary>
+        <CategoryMaintenance
+          api={api}
+          categories={categories}
+          busy={busy}
+          onBusy={withBusy}
+          onMigrated={() => {
+            void (async () => {
+              await loadConfig();
+              await loadOps();
+            })();
+          }}
+        />
       </details>
 
       <details className="section" open>
