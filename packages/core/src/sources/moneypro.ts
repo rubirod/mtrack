@@ -90,6 +90,9 @@ export interface ConvertedMoneyPro {
   operations: ClassifiedOperation[];
 }
 
+/** Same category the Cash tab's "Adjust balance" writes. */
+const ADJUST_CATEGORY = 'Balance adjustment';
+
 function formatDate(epochSec: number): string {
   const d = new Date(epochSec * 1000);
   const dd = String(d.getUTCDate()).padStart(2, '0');
@@ -222,6 +225,31 @@ export function convertMoneyPro(
     const balanceName = (balance.name || balance.description || '').trim();
     if (!balanceName) continue;
     const cur = balance.currencyKey ?? '';
+
+    // Opening balances (type 7) and balance reconciliations (type 8). They
+    // carry no splits, payee or description, and the sign of `sum` is
+    // meaningful: positive tops the balance up. Shaped exactly like the Cash
+    // tab's "Adjust balance" op so both flows read the same in reports.
+    if (t.transactionType === 7 || t.transactionType === 8) {
+      operations.push({
+        date,
+        time: null,
+        account: balanceName,
+        amount: t.sum,
+        currency: cur,
+        bankCategory: '',
+        mcc: null,
+        description: ADJUST_CATEGORY,
+        kind: t.sum >= 0 ? 'income' : 'expense',
+        category: ADJUST_CATEGORY,
+        counterparty: null,
+        source: 'rule',
+        needsConfirmation: false,
+        excluded: false,
+        sourceId: `mp:${t.primaryKey}:0`,
+      });
+      continue;
+    }
 
     const splits = splitsByTxn.get(t.primaryKey) ?? [];
     if (splits.length === 0) {

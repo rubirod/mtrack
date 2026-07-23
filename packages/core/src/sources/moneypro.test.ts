@@ -67,3 +67,41 @@ describe('convertMoneyPro archived balances', () => {
     expect(out.balances.find((b) => b.name === 'Main')?.archived).toBe(false);
   });
 });
+
+describe('convertMoneyPro balance adjustments (types 7 and 8)', () => {
+  const txn = (over: Partial<MoneyProData['transactions'][number]>) => ({
+    primaryKey: 'ta',
+    date: 1_700_000_000,
+    sum: 0,
+    description: null,
+    transactionType: 7,
+    cashFlowPrimaryKey: '1',
+    secondCashFlowPrimaryKey: null,
+    secondSum: 0,
+    isDeleted: 0,
+    isHidden: 0,
+    ...over,
+  });
+
+  it('keeps the sign of an opening balance (type 7) and marks it income', () => {
+    const data = fixture();
+    data.transactions = [txn({ sum: 17_065_000 })];
+    data.splits = [];
+    const [op] = convertMoneyPro(data).operations;
+    // The regression: the no-split expense branch forced this to -17,065,000.
+    expect(op).toMatchObject({
+      amount: 17_065_000,
+      kind: 'income',
+      category: 'Balance adjustment',
+      description: 'Balance adjustment',
+    });
+  });
+
+  it('keeps a negative reconciliation (type 8) as a signed expense', () => {
+    const data = fixture();
+    data.transactions = [txn({ transactionType: 8, sum: -20_592 })];
+    data.splits = [];
+    const [op] = convertMoneyPro(data).operations;
+    expect(op).toMatchObject({ amount: -20_592, kind: 'expense', category: 'Balance adjustment' });
+  });
+});
