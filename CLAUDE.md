@@ -112,15 +112,11 @@ pnpm --filter @mtrack/web build      # production PWA build
 
 ## Solo-dev workflow
 
-This is a solo repo with a single squashed/amended `Initial commit` on
-`main`. Until first public release it's acceptable to:
-
-- amend `main` and `git push -f`, keeping history tidy;
-- collapse changes into the initial commit rather than stacking many
-  small ones.
-
-After the first public release announce, **stop amending** and use
-normal additive commits.
+This is a solo repo, but `main` is now shared between concurrent Claude
+sessions (local + web). Use normal additive commits and plain `git push`.
+**Never amend published commits or force-push `main` without the user's
+explicit go-ahead in the current session** — another session may have
+already fetched the old commit.
 
 ## Things that often need re-checking before merging
 
