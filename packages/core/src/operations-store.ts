@@ -481,6 +481,20 @@ export async function reclassifyAll(
           kept = true;
         }
       }
+      // The empty-cell check can't protect `kind`: the no-rule fallback emits
+      // 'expense', never a blank. When no counterparty rule matched
+      // (classified.counterparty is null), the fallback must not downgrade a
+      // curated kind — e.g. Money Pro transfers and incomes, which have no
+      // bankCategory or description for rules to rediscover them from.
+      const kindIdx = HEADERS.indexOf('kind');
+      if (
+        classified.counterparty === null &&
+        !isEmptyCell(existingRow[kindIdx]) &&
+        merged[kindIdx] !== existingRow[kindIdx]
+      ) {
+        merged[kindIdx] = existingRow[kindIdx] ?? '';
+        kept = true;
+      }
       if (kept) preserved++;
     }
 

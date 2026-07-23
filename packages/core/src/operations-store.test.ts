@@ -15,7 +15,8 @@ const EMPTY_CONFIG: ClassifyConfig = {
   merchantRules: [],
   counterpartyRules: [],
 };
-const CATEGORY_COL = 5; // id,occurredAt,account,accountName,kind,category,…
+const KIND_COL = 4; // id,occurredAt,account,accountName,kind,category,…
+const CATEGORY_COL = 5;
 const OVERRIDE_COL = 15;
 
 /**
@@ -227,6 +228,35 @@ describe('reclassifyAll non-destructive mode', () => {
 
     const rows = await api.getValues('operations!A2:S');
     expect(rows[0]![CATEGORY_COL]).toBe('Eating out');
+  });
+
+  it('keeps a curated kind when no counterparty rule matches (preserveNonEmpty)', async () => {
+    // A Money Pro transfer: kind is curated data, and its blank bankCategory /
+    // unmatched description give the rules nothing to rediscover it from. The
+    // expense fallback must not downgrade it.
+    const api = makeFakeApi();
+    await pushOperations(api, [op({ kind: 'transfer', category: null, counterparty: 'Podushka' })], 'manual');
+
+    const res = await reclassifyAll(api, EMPTY_CONFIG, { preserveNonEmpty: true });
+    expect(res.preserved).toBe(1);
+
+    const rows = await api.getValues('operations!A2:S');
+    expect(rows[0]![KIND_COL]).toBe('transfer');
+  });
+
+  it('a matching counterparty rule still overwrites the old kind', async () => {
+    const api = makeFakeApi();
+    await pushOperations(api, [op({ kind: 'transfer', category: null, counterparty: 'Podushka' })], 'manual');
+
+    const config: ClassifyConfig = {
+      bankCategoryMap: new Map(),
+      merchantRules: [],
+      counterpartyRules: [{ match: 'coffee', kind: 'peer', label: 'Buddy' }],
+    };
+    await reclassifyAll(api, config, { preserveNonEmpty: true });
+
+    const rows = await api.getValues('operations!A2:S');
+    expect(rows[0]![KIND_COL]).toBe('peer');
   });
 });
 
