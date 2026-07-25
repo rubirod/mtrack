@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   classify,
   loadClassifyConfig,
@@ -32,7 +32,38 @@ interface Reconciled {
   review: ReviewItem[];
 }
 
+/**
+ * Everything the reconciliation needs, kept so that changing the channel
+ * re-runs it locally instead of re-reading the whole `operations` tab.
+ */
+interface ParsedSource {
+  classified: ClassifiedOperation[];
+  existing: ExistingOp[];
+  routing: Map<string, string>;
+}
+
 type Decision = 'add' | 'skip';
+
+/** Last channel imported with, so the next import defaults to it. */
+const CHANNEL_KEY = 'mtrack.import.channel.v1';
+/** Sentinel option that reveals the free-text field for a brand-new bank. */
+const NEW_CHANNEL = '__new_channel__';
+
+function readLastChannel(): string {
+  try {
+    return localStorage.getItem(CHANNEL_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeLastChannel(c: string): void {
+  try {
+    localStorage.setItem(CHANNEL_KEY, c);
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * Statement import.
@@ -47,16 +78,67 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Namespaces a statement by source (default "csv"). A distinct label per bank
-  // keeps card tails from colliding in the routing table.
-  const [channel, setChannel] = useState('csv');
+  // Namespaces a statement by source. A distinct label per bank keeps card
+  // tails from colliding in the routing table — and picking the wrong one is
+  // costly: the routing key is `channel|tail`, so a mismatched channel routes
+  // nothing, and every row of the statement looks new. Hence a picker over the
+  // channels the sheet actually routes, rather than a free-text field.
+  const [channels, setChannels] = useState<string[]>([]);
+  const [channel, setChannel] = useState<string>(() => readLastChannel());
+  const [newChannel, setNewChannel] = useState('');
+  const [source, setSource] = useState<ParsedSource | null>(null);
   const [rec, setRec] = useState<Reconciled | null>(null);
   // Per-review-item decision; a missing entry means "skip" (trust the master).
   const [decisions, setDecisions] = useState<Record<number, Decision>>({});
 
+  const pickingNew = channel === NEW_CHANNEL;
+  const effectiveChannel = (pickingNew ? newChannel : channel).trim();
+
+  // The channels the `accounts` tab routes. A failure here is not fatal: the
+  // "new channel" option still lets the user type one.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const rows = await createSheetsAPI(settings.spreadsheetId).getValues('accounts!A2:A');
+        if (!alive) return;
+        const seen = [...new Set(rows.map((r) => String(r[0] ?? '').trim()).filter(Boolean))];
+        seen.sort();
+        setChannels(seen);
+      } catch {
+        /* offline, or no token yet — the free-text fallback covers it */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [settings.spreadsheetId]);
+
+  // Reconciliation is pure once the file is parsed, so switching channels
+  // re-runs it instantly — no need to re-pick the file to fix a wrong choice.
+  useEffect(() => {
+    if (!source) {
+      setRec(null);
+      return;
+    }
+    const result = reconcile(source.classified, source.existing, source.routing, effectiveChannel);
+    setDecisions({});
+    setRec({
+      channel: effectiveChannel,
+      parsed: source.classified.length,
+      toAdd: result.toAdd,
+      skipped: result.skipped.length,
+      review: result.ambiguous.map((a) => ({
+        ...a,
+        balance: source.routing.get(`${effectiveChannel}|${a.op.account ?? ''}`) || '(unrouted)',
+      })),
+    });
+  }, [source, effectiveChannel]);
+
   async function handleFile(file: File): Promise<void> {
     setError(null);
     setStatus(null);
+    setSource(null);
     setRec(null);
     setDecisions({});
     setBusy(true);
@@ -68,7 +150,6 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
 
       const ops = await parseFile(file);
       const classified = ops.map((op) => classify(op, config));
-      const sourceChannel = channel.trim() || 'csv';
 
       setStatus(`Parsed ${classified.length}. Reconciling against existing operations…`);
       const [opRows, accRows] = await Promise.all([
@@ -90,18 +171,9 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
         if (sc) routing.set(`${sc}|${r[1] ?? ''}`, r[2] ?? '');
       }
 
-      const result = reconcile(classified, existing, routing, sourceChannel);
-      const review: ReviewItem[] = result.ambiguous.map((a) => ({
-        ...a,
-        balance: routing.get(`${sourceChannel}|${a.op.account ?? ''}`) || '(unrouted)',
-      }));
-      setRec({
-        channel: sourceChannel,
-        parsed: classified.length,
-        toAdd: result.toAdd,
-        skipped: result.skipped.length,
-        review,
-      });
+      // The effect above turns this into a reconciliation, and re-runs it on
+      // every later channel change.
+      setSource({ classified, existing, routing });
       setStatus(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -131,9 +203,11 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
       const toImport = [...rec.toAdd, ...reviewAdds.map((r) => r.op)];
       setStatus(`Importing ${toImport.length} operations…`);
       const result = await pushOperations(api, toImport, rec.channel);
+      writeLastChannel(rec.channel);
       setStatus(
         `Done. Appended ${result.appended}, updated ${result.updated}, unchanged ${result.unchanged}.`,
       );
+      setSource(null);
       setRec(null);
       setDecisions({});
     } catch (e) {
@@ -155,33 +229,51 @@ export function ImportScreen({ settings }: Props): React.JSX.Element {
 
       <div className="card">
         <label htmlFor="channel">Source channel</label>
-        <input
+        <select
           id="channel"
-          type="text"
           value={channel}
-          placeholder="csv"
           disabled={busy}
           onChange={(e) => setChannel(e.target.value)}
-        />
+        >
+          <option value="">— pick —</option>
+          {channels.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+          {channel && !pickingNew && !channels.includes(channel) && (
+            <option value={channel}>{channel}</option>
+          )}
+          <option value={NEW_CHANNEL}>New channel…</option>
+        </select>
+        {pickingNew && (
+          <input
+            type="text"
+            value={newChannel}
+            placeholder="e.g. mybank-csv"
+            disabled={busy}
+            onChange={(e) => setNewChannel(e.target.value)}
+          />
+        )}
         <div className="hint">
-          A label for where this statement came from. Use a distinct one per
-          bank so card tails don't collide in routing. Set it before choosing
-          the file.
+          Where this statement came from — the channels your <code>accounts</code>{' '}
+          tab routes. Card tails are routed per channel, so the wrong one routes
+          nothing and every row looks new. Switching it re-runs the
+          reconciliation, so a wrong pick costs nothing.
         </div>
         <label htmlFor="file">Statement file (CSV)</label>
         <input
           id="file"
           type="file"
           accept=".csv,text/csv"
-          disabled={busy}
+          disabled={busy || !effectiveChannel}
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) void handleFile(f);
           }}
         />
         <div className="hint">
-          CSV today. PDF will be handled via Claude vision — same pipeline that
-          parses receipts.
+          {effectiveChannel
+            ? 'CSV today. PDF will be handled via Claude vision — same pipeline that parses receipts.'
+            : 'Pick a source channel first.'}
         </div>
       </div>
 
