@@ -20,9 +20,14 @@ the browser's `localStorage`; the sheet is the only "server".
 - Google OAuth Client ID is **baked into the build** via
   `VITE_GOOGLE_CLIENT_ID` (set in CI via repo variable `GOOGLE_CLIENT_ID`).
   Public by design; Authorized JavaScript origins on the OAuth client
-  restrict its use to the deployed PWA origin. The Client Secret is never
-  used in browser flow. Per-user secrets (Anthropic key, spreadsheet ID)
-  stay in `localStorage`.
+  restrict its use to the deployed PWA origin **and `http://localhost:5173`**,
+  so the full sign-in flow works against the dev server too (put the same
+  Client ID in `apps/web/.env.local`). Prefer verifying auth changes there —
+  it is much faster than waiting for a Pages deploy. Note that the localhost
+  origin has its own `localStorage`: its spreadsheet and key are set
+  separately, so check which sheet it points at before writing anything.
+  The Client Secret is never used in browser flow. Per-user secrets
+  (Anthropic key, spreadsheet ID) stay in `localStorage`.
 
 ## Layout
 
