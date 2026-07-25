@@ -26,11 +26,21 @@
  * edit, re-sort), the migration aborts instead of writing to shifted rows.
  */
 
-import type { Row, SheetsAPI, ValueRange } from './sheets-api';
+import type { SheetsAPI } from './sheets-api';
 import { OPERATION_HEADERS } from './operations-store';
-import { readHeaderRow } from './tab-schema';
+import {
+  cleanRenames,
+  colLetter,
+  findCol,
+  planColumn,
+  safeRead,
+  validateRenames,
+  writeChunked,
+  type Rename,
+  type TabPlan,
+} from './migration-utils';
 
-export interface CategoryRename {
+export interface CategoryRename extends Rename {
   /** Existing category name to migrate away from. */
   from: string;
   /** Target name. May be brand new (rename) or existing (merge). */
@@ -58,13 +68,6 @@ export interface MigrationReport {
   cellWrites: number;
 }
 
-const CHUNK = 200;
-
-interface TabPlan {
-  /** Cell updates for one tab, already in A1 notation. */
-  updates: ValueRange[];
-}
-
 interface Analysis {
   report: MigrationReport;
   categoriesPlan: TabPlan;
@@ -78,55 +81,9 @@ interface Analysis {
   opsUpdatedAtColLetter: string;
 }
 
-function colLetter(idx0based: number): string {
-  if (idx0based < 0 || idx0based > 25) throw new Error(`column index out of A-Z range: ${idx0based}`);
-  return String.fromCharCode('A'.charCodeAt(0) + idx0based);
-}
-
-/** Column index by header name, with a canonical fallback for blank headers. */
-async function findCol(
-  api: SheetsAPI,
-  tab: string,
-  header: string,
-  fallback: number,
-): Promise<number> {
-  const row = await readHeaderRow(api, tab);
-  const idx = row.indexOf(header);
-  return idx >= 0 ? idx : fallback;
-}
-
-function validateRenames(renames: CategoryRename[]): void {
-  const seen = new Set<string>();
-  for (const r of renames) {
-    const from = r.from.trim();
-    const to = r.to.trim();
-    if (!from || !to) throw new Error('Both "from" and "to" must be non-empty');
-    if (from === to) throw new Error(`Rename "${from}" → same name is a no-op`);
-    if (seen.has(from)) throw new Error(`Duplicate rename source "${from}"`);
-    seen.add(from);
-  }
-  // Chains (A→B while B→C is also requested) would make the outcome depend
-  // on execution order; refuse them so every rename is a single hop.
-  for (const r of renames) {
-    if (seen.has(r.to.trim())) {
-      throw new Error(
-        `Chained rename: "${r.from}" → "${r.to}" while "${r.to}" is itself being renamed`,
-      );
-    }
-  }
-}
-
-async function safeRead(api: SheetsAPI, range: string): Promise<string[][]> {
-  try {
-    return await api.getValues(range);
-  } catch {
-    return [];
-  }
-}
-
 async function analyze(api: SheetsAPI, renames: CategoryRename[]): Promise<Analysis> {
   validateRenames(renames);
-  const cleaned = renames.map((r) => ({ from: r.from.trim(), to: r.to.trim() }));
+  const cleaned = cleanRenames(renames);
   const byFrom = new Map(cleaned.map((r) => [r.from, r.to]));
 
   const [catNameCol, catParentCol, bankMapCatCol, merchantCatCol, cpCatCol] = await Promise.all([
@@ -218,25 +175,18 @@ async function analyze(api: SheetsAPI, renames: CategoryRename[]): Promise<Analy
     }
   }
 
-  const planColumn = (
+  const plan = (
     rows: string[][],
     colIdx: number,
     tab: string,
-    plan: TabPlan,
+    target: TabPlan,
     bump: (c: RenameCounts) => void,
-  ): void => {
-    for (let i = 0; i < rows.length; i++) {
-      const value = (rows[i]![colIdx] ?? '').trim();
-      const to = byFrom.get(value);
-      if (to === undefined) continue;
-      bump(counts.get(value)!);
-      plan.updates.push({ range: `${tab}!${colLetter(colIdx)}${i + 2}`, values: [[to]] });
-    }
-  };
+  ): void =>
+    planColumn(rows, colIdx, tab, byFrom, target, (from) => bump(counts.get(from)!));
 
-  planColumn(bankRows, bankMapCatCol, 'bank_category_map', bankMapPlan, (c) => c.bankMapRefs++);
-  planColumn(merchantRows, merchantCatCol, 'merchant_rules', merchantPlan, (c) => c.merchantRuleRefs++);
-  planColumn(cpRows, cpCatCol, 'counterparty_rules', counterpartyPlan, (c) => c.counterpartyRuleRefs++);
+  plan(bankRows, bankMapCatCol, 'bank_category_map', bankMapPlan, (c) => c.bankMapRefs++);
+  plan(merchantRows, merchantCatCol, 'merchant_rules', merchantPlan, (c) => c.merchantRuleRefs++);
+  plan(cpRows, cpCatCol, 'counterparty_rules', counterpartyPlan, (c) => c.counterpartyRuleRefs++);
 
   // `operations`: category cell + updatedAt bump, all rows including pinned.
   const now = new Date().toISOString();
@@ -284,12 +234,6 @@ export async function previewCategoryMigration(
 ): Promise<MigrationReport> {
   const a = await analyze(api, renames);
   return a.report;
-}
-
-async function writeChunked(api: SheetsAPI, updates: ValueRange[]): Promise<void> {
-  for (let i = 0; i < updates.length; i += CHUNK) {
-    await api.batchUpdateValues(updates.slice(i, i + CHUNK));
-  }
 }
 
 /**

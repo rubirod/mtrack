@@ -9,6 +9,7 @@ export * from './tab-schema';
 export * from './accounts-routing';
 export * from './reconcile';
 export * from './category-migration';
+export * from './balance-migration';
 export * from './sources/csv-statement';
 export * from './sources/pdf-statement';
 export * from './sources/moneypro';

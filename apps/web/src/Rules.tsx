@@ -10,6 +10,7 @@ import {
 import type { Settings } from './settings';
 import { createSheetsAPI } from './google';
 import { clusterMerchant } from './merchants';
+import { BalanceMaintenance } from './BalanceMaintenance';
 import { CategoryMaintenance } from './CategoryMaintenance';
 
 /**
@@ -508,6 +509,10 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
     .map((b) => ({ name: b.name.trim(), archived: b.archived }))
     .sort((a, b) => Number(a.archived) - Number(b.archived));
 
+  // Merging away a dead balance is the main use of the maintenance tool, so
+  // its suggestions include archived ones.
+  const allBalanceNames = routingBalances.map((b) => b.name);
+
   if (loading) {
     return (
       <>
@@ -751,6 +756,22 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
           </div>
         </>
       )}
+      </details>
+
+      <details className="section">
+        <summary>Balance maintenance</summary>
+        <BalanceMaintenance
+          api={api}
+          balances={allBalanceNames}
+          busy={busy}
+          onBusy={withBusy}
+          onMigrated={() => {
+            void (async () => {
+              await loadConfig();
+              await loadOps();
+            })();
+          }}
+        />
       </details>
 
       <details className="section">
