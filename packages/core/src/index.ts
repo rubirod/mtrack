@@ -10,6 +10,7 @@ export * from './accounts-routing';
 export * from './reconcile';
 export * from './category-migration';
 export * from './category-reassign';
+export * from './rules-merge';
 export * from './balance-migration';
 export * from './sources/csv-statement';
 export * from './sources/pdf-statement';

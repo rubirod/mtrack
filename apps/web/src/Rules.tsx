@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   assertWritableTab,
+  mergeMerchantPicks,
+  type CounterpartyRuleRow,
+  type MerchantRuleRow,
   loadClassifyConfig,
   reclassifyAll,
   upsertAccountRouting,
@@ -73,15 +76,7 @@ interface MerchantEntry {
   picked: string;
 }
 
-interface CounterpartyRuleRow {
-  match: string;
-  kind: 'transfer' | 'income' | 'peer';
-  label: string;
-  category: string;
-  suggest: string;
-  excluded: string;
-  field: string;
-}
+
 
 interface BankCategoryEntry {
   bankCategory: string;
@@ -90,15 +85,12 @@ interface BankCategoryEntry {
   merchants: MerchantEntry[];
 }
 
-interface MerchantRuleRow {
-  match: string;
-  category: string;
-}
+
 
 const BALANCES_HEADERS = ['name', 'currency', 'type', 'archived'];
 const BANK_MAP_HEADERS = ['bankCategory', 'category'];
-const MERCHANT_HEADERS = ['match', 'category'];
-const CP_HEADERS = ['match', 'kind', 'label', 'category', 'suggest', 'excluded', 'field'];
+const MERCHANT_HEADERS = ['match', 'category', 'bankCategory'];
+const CP_HEADERS = ['match', 'kind', 'label', 'category', 'suggest', 'excluded', 'field', 'tail'];
 
 export function RulesScreen({ settings }: Props): React.JSX.Element {
   const api = useMemo(
@@ -144,8 +136,8 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
       const [balanceRows, bankMapRows, merchantRows, cpRows, categoryRows] = await Promise.all([
         safeRead(api, 'balances!A2:D'),
         safeRead(api, 'bank_category_map!A2:B'),
-        safeRead(api, 'merchant_rules!A2:B'),
-        safeRead(api, 'counterparty_rules!A2:G'),
+        safeRead(api, 'merchant_rules!A2:C'),
+        safeRead(api, 'counterparty_rules!A2:H'),
         safeRead(api, 'categories!A2:B'),
       ]);
 
@@ -178,15 +170,15 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
 
       const merchantRules: MerchantRuleRow[] = [];
       for (const row of merchantRows) {
-        const [match, category] = row;
-        if (match) merchantRules.push({ match, category: category ?? '' });
+        const [match, category, bankCategory] = row;
+        if (match) merchantRules.push({ match, category: category ?? '', bankCategory: bankCategory ?? '' });
       }
       merchantRulesRef.current = merchantRules;
       setExistingMerchantRules(merchantRules);
 
       const cpRules: CounterpartyRuleRow[] = [];
       for (const row of cpRows) {
-        const [match, kind, label, category, suggest, excluded, field] = row;
+        const [match, kind, label, category, suggest, excluded, field, tail] = row;
         if (!match || !kind || !label) continue;
         if (kind !== 'transfer' && kind !== 'income' && kind !== 'peer') continue;
         cpRules.push({
@@ -197,6 +189,7 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
           suggest: suggest ?? '',
           excluded: excluded ?? '',
           field: field ?? 'description',
+          tail: tail ?? '',
         });
       }
       cpRulesRef.current = cpRules;
@@ -381,83 +374,40 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
 
   async function saveOverrides(): Promise<void> {
     await withBusy(async () => {
-      // The merchant breakdown writes to two sheets:
-      //   merchant_rules        for `exp:<category>` picks.
-      //   counterparty_rules    for `trf:<balance>`, `peer`, `inc` picks.
-      // Pre-existing rules untouched by the UI stay as-is — we upsert by
-      // exact match string in each sheet.
-      const merchantMap = new Map<string, string>();
-      for (const r of existingMerchantRules) merchantMap.set(r.match, r.category);
+      // The merchant breakdown writes to two sheets: merchant_rules for
+      // `exp:<category>` picks, counterparty_rules for `trf:`/`peer`/`inc`.
+      // Folding is delegated to `mergeMerchantPicks`, which preserves rules the
+      // editor cannot express — the same match scoped to a bank category or a
+      // card tail — and their order.
+      const picks = bankCats
+        .flatMap((bc) => bc.merchants)
+        .filter((m) => m.picked.trim() && m.picked !== m.existingPicked)
+        .map((m) => ({ merchant: m.merchant, picked: m.picked }));
 
-      const cpMap = new Map<string, CounterpartyRuleRow>();
-      for (const r of existingCpRules) cpMap.set(r.match, r);
-
-      let touched = 0;
-      for (const bc of bankCats) {
-        for (const m of bc.merchants) {
-          const picked = m.picked.trim();
-          if (!picked) continue;
-          if (picked === m.existingPicked) continue;
-          touched++;
-
-          if (picked.startsWith('exp:')) {
-            const category = picked.slice(4);
-            merchantMap.set(m.merchant, category);
-            // If a counterparty rule with the same match was used before,
-            // remove it so the merchant_rule takes effect cleanly.
-            cpMap.delete(m.merchant);
-          } else if (picked.startsWith('trf:')) {
-            const label = picked.slice(4);
-            cpMap.set(m.merchant, {
-              match: m.merchant,
-              kind: 'transfer',
-              label,
-              category: '',
-              suggest: '',
-              excluded: '',
-              field: 'description',
-            });
-            merchantMap.delete(m.merchant);
-          } else if (picked === 'peer') {
-            cpMap.set(m.merchant, {
-              match: m.merchant,
-              kind: 'peer',
-              label: m.merchant,
-              category: '',
-              suggest: '',
-              excluded: '',
-              field: 'description',
-            });
-            merchantMap.delete(m.merchant);
-          } else if (picked === 'inc') {
-            cpMap.set(m.merchant, {
-              match: m.merchant,
-              kind: 'income',
-              label: m.merchant,
-              category: '',
-              suggest: '',
-              excluded: '',
-              field: 'description',
-            });
-            merchantMap.delete(m.merchant);
-          }
-        }
-      }
-
-      const merchantRowsToWrite: Row[] = [...merchantMap.entries()]
-        .filter(([match, cat]) => match && cat)
-        .map(([match, cat]) => [match, cat]);
-      const cpRowsToWrite: Row[] = [...cpMap.values()]
-        .filter((r) => r.match && r.kind && r.label)
-        .map((r) => [r.match, r.kind, r.label, r.category, r.suggest, r.excluded, r.field]);
+      const merged = mergeMerchantPicks(existingMerchantRules, existingCpRules, picks);
+      const merchantRowsToWrite: Row[] = merged.merchantRules.map((r) => [
+        r.match,
+        r.category,
+        r.bankCategory,
+      ]);
+      const cpRowsToWrite: Row[] = merged.counterpartyRules.map((r) => [
+        r.match,
+        r.kind,
+        r.label,
+        r.category,
+        r.suggest,
+        r.excluded,
+        r.field,
+        r.tail,
+      ]);
 
       await rewriteTab(api, 'merchant_rules', MERCHANT_HEADERS, merchantRowsToWrite);
       await rewriteTab(api, 'counterparty_rules', CP_HEADERS, cpRowsToWrite);
 
       setStatus(
-        touched > 0
-          ? `Saved overrides (${touched} new / changed). Merchant: ${merchantRowsToWrite.length}, counterparty: ${cpRowsToWrite.length}.`
-          : `No changes.`,
+        picks.length > 0
+          ? `Saved overrides (${picks.length} new / changed). Merchant: ${merchantRowsToWrite.length}, counterparty: ${cpRowsToWrite.length}.`
+          : 'No changes.',
       );
     });
   }
