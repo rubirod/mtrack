@@ -1,26 +1,39 @@
 import { useState } from 'react';
 import {
   applyCategoryMigration,
+  applyCategoryReassign,
   previewCategoryMigration,
+  previewCategoryReassign,
   type CategoryRename,
+  type CategoryReassign,
   type MigrationReport,
+  type ReassignReport,
   type SheetsAPI,
 } from '@mtrack/core';
+import { CategoryOptions, type CategoryTree } from './category-tree';
 
 /**
- * Category rename / merge tool (Rules → "Category maintenance").
+ * Category maintenance (Rules → "Category maintenance"). Two tools, because
+ * there are two distinct verbs and confusing them corrupts the tree:
  *
- * The user queues rename pairs (`from` picked from existing categories,
- * `to` typed freely — an existing name turns the rename into a merge),
- * previews how many cells each pair touches across the five places a
- * category name lives in, then applies. Apply re-reads the sheet itself,
- * so a stale preview can't misdirect it; the preview is a required step
- * only to make the blast radius visible before an invasive write.
+ *  - **Rename / merge** — the name ceases to exist and is replaced everywhere,
+ *    `parent` cells included, so children follow their renamed parent instead
+ *    of being orphaned.
+ *  - **Move operations** — the category keeps existing (usually because it
+ *    groups others) but stops holding operations of its own. Only operations
+ *    and the rules that produced them are repointed; the tree is untouched.
+ *
+ * Both preview first: the count of affected cells is the only warning before
+ * an invasive write, and Apply re-reads the sheet so a stale preview can't
+ * misdirect it.
  */
 
 interface Props {
   api: SheetsAPI;
+  /** Every category name, groups included — renaming a group is legitimate. */
   categories: string[];
+  /** Tree, so the move tool can offer only leaves as a destination. */
+  tree: CategoryTree;
   busy: boolean;
   onBusy: (fn: () => Promise<void>) => Promise<void>;
   /** Called after a successful apply so the parent can reload sheet data. */
@@ -35,6 +48,7 @@ interface PairDraft {
 export function CategoryMaintenance({
   api,
   categories,
+  tree,
   busy,
   onBusy,
   onMigrated,
@@ -42,6 +56,50 @@ export function CategoryMaintenance({
   const [pairs, setPairs] = useState<PairDraft[]>([{ from: '', to: '' }]);
   const [report, setReport] = useState<MigrationReport | null>(null);
   const [applied, setApplied] = useState(false);
+  const [move, setMove] = useState<PairDraft>({ from: '', to: '' });
+  const [moveReport, setMoveReport] = useState<ReassignReport | null>(null);
+  const [moveApplied, setMoveApplied] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+
+  const moveValid = Boolean(move.from.trim() && move.to.trim() && move.from !== move.to);
+  const moves: CategoryReassign[] = moveValid
+    ? [{ from: move.from.trim(), to: move.to.trim() }]
+    : [];
+
+  function editMove(patch: Partial<PairDraft>): void {
+    setMove({ ...move, ...patch });
+    setMoveReport(null);
+    setMoveApplied(false);
+    setMoveError(null);
+  }
+
+  async function previewMove(): Promise<void> {
+    await onBusy(async () => {
+      setMoveApplied(false);
+      setMoveError(null);
+      try {
+        setMoveReport(await previewCategoryReassign(api, moves));
+      } catch (e) {
+        setMoveReport(null);
+        setMoveError(e instanceof Error ? e.message : String(e));
+      }
+    });
+  }
+
+  async function applyMove(): Promise<void> {
+    const n = moveReport?.moves[0]?.operationRows ?? 0;
+    if (!confirm(`Move ${n} operations from "${move.from}" to "${move.to}"?`)) return;
+    await onBusy(async () => {
+      try {
+        setMoveReport(await applyCategoryReassign(api, moves));
+        setMoveApplied(true);
+        setMove({ from: '', to: '' });
+        onMigrated();
+      } catch (e) {
+        setMoveError(e instanceof Error ? e.message : String(e));
+      }
+    });
+  }
 
   const validPairs: CategoryRename[] = pairs
     .filter((p) => p.from.trim() && p.to.trim() && p.from.trim() !== p.to.trim())
@@ -90,6 +148,57 @@ export function CategoryMaintenance({
 
   return (
     <>
+      <h3 style={{ marginTop: 0 }}>Move operations to another category</h3>
+      <p className="hint">
+        Empties a category of its operations while keeping it in the tree — what a
+        grouping node needs when it accidentally holds operations of its own
+        (an operation should always sit on a leaf). Only <code>operations</code> and the
+        rules that produced them are repointed; the <code>categories</code> tab is not
+        touched. The destination list offers leaves only.
+      </p>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <select
+          value={move.from}
+          disabled={busy}
+          aria-label="Move operations from"
+          onChange={(e) => editMove({ from: e.target.value })}
+        >
+          <option value="">— from —</option>
+          {categories.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+        <select
+          value={move.to}
+          disabled={busy}
+          aria-label="Move operations to"
+          onChange={(e) => editMove({ to: e.target.value })}
+        >
+          <option value="">— to (leaf) —</option>
+          <CategoryOptions tree={tree} />
+        </select>
+        <button className="secondary" onClick={previewMove} disabled={busy || !moveValid}>
+          Preview
+        </button>
+      </div>
+      {moveError && <div className="error">{moveError}</div>}
+      {moveReport && moveReport.moves[0] && (
+        <p className="hint">
+          {moveReport.moves[0].operationRows} operations,{' '}
+          {moveReport.moves[0].bankMapRefs +
+            moveReport.moves[0].merchantRuleRefs +
+            moveReport.moves[0].counterpartyRuleRefs}{' '}
+          rules — {moveReport.cellWrites} cell writes.
+          {moveApplied ? ' Done.' : ''}
+        </p>
+      )}
+      {moveReport && !moveApplied && (
+        <button className="primary" onClick={applyMove} disabled={busy || !moveValid}>
+          {busy ? 'Working…' : 'Move operations'}
+        </button>
+      )}
+
+      <h3>Rename or merge a category</h3>
       <p className="hint">
         Rename or merge categories everywhere at once: the <code>categories</code> tab
         (names and parents), all three rule tabs, and every affected <code>operations</code> row —

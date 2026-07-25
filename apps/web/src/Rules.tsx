@@ -792,6 +792,7 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
         <CategoryMaintenance
           api={api}
           categories={categories}
+          tree={categoryTree}
           busy={busy}
           onBusy={withBusy}
           onMigrated={() => {
