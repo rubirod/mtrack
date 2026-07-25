@@ -6,6 +6,18 @@
  * the browser via popup or silent. Refresh — call the client again; safe
  * because the user is already signed into Google in the browser.
  *
+ * Keeping the session alive. The token client ALWAYS opens a popup window,
+ * even with `prompt: 'none'` — measured: without a user gesture it fails in
+ * ~3ms with `popup_failed_to_open`. So a background timer cannot renew the
+ * token, and the implicit flow has no refresh token (that would need a
+ * backend holding the client secret). What does work is renewing *during* a
+ * user gesture: inside a click, `prompt: 'none'` with a live Google session
+ * returns a fresh token in under a second, asking nothing — the popup opens
+ * and closes itself. `startTokenAutoRefresh` therefore tops the token up on
+ * the user's own taps, well before it expires, so the "Reconnect" banner
+ * stops appearing every hour. It's a best-effort renewal: if it fails the
+ * app degrades to exactly the old behaviour (banner → interactive sign-in).
+ *
  * The Google OAuth Client ID is baked into the build via
  * `VITE_GOOGLE_CLIENT_ID` (see `.env.example`). It is **public by design**:
  * the Authorized JavaScript origins on the OAuth client lock its usage to
@@ -69,6 +81,36 @@ export interface AccessToken {
 // new scopes) get discarded and the user re-consents.
 const TOKEN_KEY = 'mtrack.google.token.v2';
 
+// Survives token expiry: it records that this device has signed in at least
+// once, so the gesture refresher stays quiet on a device that never has (a
+// speculative popup on the login screen would be pure noise). Cleared only
+// by an explicit sign-out.
+const SESSION_KEY = 'mtrack.google.session.v1';
+
+function markSession(): void {
+  try {
+    localStorage.setItem(SESSION_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+function hasSession(): boolean {
+  try {
+    return localStorage.getItem(SESSION_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function clearSession(): void {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 function readStoredToken(): AccessToken | null {
   try {
     const raw = localStorage.getItem(TOKEN_KEY);
@@ -83,6 +125,7 @@ function readStoredToken(): AccessToken | null {
 }
 
 function writeStoredToken(t: AccessToken): void {
+  markSession();
   try {
     localStorage.setItem(TOKEN_KEY, JSON.stringify(t));
   } catch {
@@ -145,11 +188,13 @@ export function isSignedIn(): boolean {
 }
 
 /**
- * Requests a token from GIS. `prompt=''` is a silent refresh (uses the existing
- * Google session via a hidden iframe); `prompt='consent'` always opens the
- * account/consent popup and so must be called from a user gesture.
+ * Requests a token from GIS. `prompt='none'` asks for no interaction: with a
+ * live Google session and prior consent it resolves in well under a second,
+ * and the popup it opens closes itself. `prompt='consent'` always shows the
+ * account/consent screen. Both need a user gesture for the popup to open at
+ * all — without one, `error_callback` reports `popup_failed_to_open`.
  */
-function requestToken(prompt: '' | 'consent'): Promise<AccessToken> {
+function requestToken(prompt: 'none' | 'consent'): Promise<AccessToken> {
   const clientId = requireClientId();
   return loadGisScript().then(
     () =>
@@ -167,10 +212,53 @@ function requestToken(prompt: '' | 'consent'): Promise<AccessToken> {
             writeStoredToken(cached);
             resolve(cached);
           },
+          // Popup blocked, closed, or otherwise unusable. Without this the
+          // promise would never settle and every caller would sit on the
+          // timeout below.
+          error_callback: (err) => reject(new Error(`Google OAuth: ${err.type}`)),
         });
         client.requestAccessToken({ prompt });
       }),
   );
+}
+
+/** Renew this long before expiry, whenever the user happens to interact. */
+const REFRESH_MARGIN_MS = 10 * 60_000;
+/** Two gesture-driven renewals are never fired closer together than this. */
+const REFRESH_COOLDOWN_MS = 60_000;
+
+let lastRefreshAttempt = 0;
+let autoRefreshInstalled = false;
+
+function onUserGesture(): void {
+  if (!hasSession() || inflight) return;
+  const t = currentToken();
+  if (t && t.expiresAt - Date.now() > REFRESH_MARGIN_MS) return;
+  const now = Date.now();
+  if (now - lastRefreshAttempt < REFRESH_COOLDOWN_MS) return;
+  lastRefreshAttempt = now;
+  // Fire and forget — we're inside the gesture, so the popup may open, and
+  // with prompt 'none' it asks nothing. A failure is not proof the session is
+  // dead (an extension may have blocked the popup), so it stays silent: the
+  // banner is still raised by the first real call that can't get a token.
+  requestToken('none').then(
+    () => {
+      if (authRestored) authRestored();
+    },
+    () => {},
+  );
+}
+
+/**
+ * Starts renewing the access token on the user's own taps. Idempotent; call
+ * once at app start. Listeners are in the capture phase so a handler that
+ * stops propagation can't suppress the renewal.
+ */
+export function startTokenAutoRefresh(): void {
+  if (autoRefreshInstalled) return;
+  autoRefreshInstalled = true;
+  document.addEventListener('pointerdown', onUserGesture, true);
+  document.addEventListener('keydown', onUserGesture, true);
 }
 
 export async function getAccessToken(): Promise<AccessToken> {
@@ -179,11 +267,12 @@ export async function getAccessToken(): Promise<AccessToken> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      // Silent refresh, but bounded: GIS never calls back when it silently
-      // needs a popup it can't open (no gesture, or blocked third-party
-      // cookies), which used to hang the whole screen. Time out and signal
-      // that an interactive sign-in is required instead.
-      const silent = requestToken('');
+      // No-interaction refresh. It succeeds only when this call happens to sit
+      // inside a user gesture and the Google session is live; otherwise
+      // `error_callback` rejects almost immediately and the caller is told to
+      // sign in interactively. The timeout is a backstop for a GIS that
+      // neither calls back nor errors.
+      const silent = requestToken('none');
       silent.catch(() => {}); // swallow late rejection if the timeout wins
       const tok = await Promise.race([
         silent,
@@ -217,6 +306,7 @@ export async function signInInteractive(): Promise<AccessToken> {
 export function signOut(): void {
   cached = null;
   clearStoredToken();
+  clearSession();
 }
 
 async function sheetsFetch(

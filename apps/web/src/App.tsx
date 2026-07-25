@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { isConfigured, loadSettings, type Settings } from './settings';
-import { isSignedIn, onAuthLost, onAuthRestored, signInInteractive } from './google';
+import {
+  isSignedIn,
+  onAuthLost,
+  onAuthRestored,
+  signInInteractive,
+  startTokenAutoRefresh,
+} from './google';
 import { LoginScreen } from './Login';
 import { SettingsScreen } from './SettingsScreen';
 import { ImportScreen } from './Import';
@@ -19,8 +25,10 @@ export function App(): React.JSX.Element {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // A background token refresh that fails flips the banner on immediately,
-  // wherever the user is.
+  // wherever the user is. The auto-refresh renews the token on the user's own
+  // taps, so in practice the banner should now be rare.
   useEffect(() => {
+    startTokenAutoRefresh();
     onAuthLost(() => setSignedIn(false));
     onAuthRestored(() => setSignedIn(true));
     return () => {
