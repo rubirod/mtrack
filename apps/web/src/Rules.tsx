@@ -12,6 +12,12 @@ import { createSheetsAPI } from './google';
 import { clusterMerchant } from './merchants';
 import { BalanceMaintenance } from './BalanceMaintenance';
 import { CategoryMaintenance } from './CategoryMaintenance';
+import {
+  buildCategoryTree,
+  CategoryOptions,
+  EMPTY_TREE,
+  type CategoryTree,
+} from './category-tree';
 
 /**
  * Rules tab — data-driven editor for balances, instrument routing,
@@ -114,6 +120,7 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
   const [existingMerchantRules, setExistingMerchantRules] = useState<MerchantRuleRow[]>([]);
   const [existingCpRules, setExistingCpRules] = useState<CounterpartyRuleRow[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [categoryTree, setCategoryTree] = useState<CategoryTree>(EMPTY_TREE);
 
   // Config inputs that loadOps needs once the page is already on screen.
   const bankMapRef = useRef<Map<string, string>>(new Map());
@@ -139,9 +146,10 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
         safeRead(api, 'bank_category_map!A2:B'),
         safeRead(api, 'merchant_rules!A2:B'),
         safeRead(api, 'counterparty_rules!A2:G'),
-        safeRead(api, 'categories!A2:A'),
+        safeRead(api, 'categories!A2:B'),
       ]);
 
+      setCategoryTree(buildCategoryTree(categoryRows));
       const categoryList: string[] = [];
       for (const r of categoryRows) {
         const v = r[0];
@@ -678,11 +686,7 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
                     onChange={(e) => updateAt(bankCats, setBankCats, i, { category: e.target.value })}
                   >
                     <option value="">— unmapped —</option>
-                    {categories.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
+                    <CategoryOptions tree={categoryTree} />
                   </select>
                 </summary>
                 <div className="merchants">
@@ -717,8 +721,17 @@ export function RulesScreen({ settings }: Props): React.JSX.Element {
                                 }
                               >
                                 <option value="">— use default —</option>
+                                {categoryTree.groups.map((grp) => (
+                                  <optgroup key={grp.parent} label={`Expense · ${grp.parent}`}>
+                                    {grp.children.map((c) => (
+                                      <option key={`exp:${c}`} value={`exp:${c}`}>
+                                        {c}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                ))}
                                 <optgroup label="Expense category">
-                                  {categories.map((c) => (
+                                  {categoryTree.loose.map((c) => (
                                     <option key={`exp:${c}`} value={`exp:${c}`}>
                                       {c}
                                     </option>

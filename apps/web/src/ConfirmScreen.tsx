@@ -9,6 +9,12 @@ import {
   type ValueRange,
 } from '@mtrack/core';
 import type { Settings } from './settings';
+import {
+  buildCategoryTree,
+  CategoryOptions,
+  EMPTY_TREE,
+  type CategoryTree,
+} from './category-tree';
 import { createSheetsAPI } from './google';
 import { clusterMerchant } from './merchants';
 import { suggestCategories } from './ai';
@@ -83,7 +89,7 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('uncategorized');
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<CategoryTree>(EMPTY_TREE);
   const [blocks, setBlocks] = useState<Block[]>([]);
   // Operations with no description can't be matched by a rule or the AI — only
   // accepted by hand. Hidden by default so the queue stays actionable.
@@ -96,13 +102,12 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
       setError(null);
       try {
         const [catRows, opRows, config] = await Promise.all([
-          api.getValues('categories!A2:A'),
+          api.getValues('categories!A2:B'),
           api.getValues(`operations!A2:${LAST_COL}`),
           loadClassifyConfig(api),
         ]);
         if (cancelled) return;
-        const cats = catRows.map((r) => r[0]).filter((c): c is string => Boolean(c));
-        setCategories(cats);
+        setCategories(buildCategoryTree(catRows));
         setBlocks(buildBlocks(opRows, filter, config.bankCategoryMap));
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -200,7 +205,7 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
       const suggestions = await suggestCategories(
         settings.anthropicKey,
         targets.map((g) => ({ merchant: g.merchant, bankCategory: g.bankCategory || undefined })),
-        categories,
+        categories.leaves,
       );
       let n = 0;
       for (const g of targets) {
@@ -311,7 +316,7 @@ export function ConfirmScreen({ settings }: Props): React.JSX.Element {
 
 function GroupCard(props: {
   g: Group;
-  categories: string[];
+  categories: CategoryTree;
   busy: boolean;
   onPick: (c: string) => void;
   onAccept: () => void;
@@ -340,11 +345,7 @@ function GroupCard(props: {
       </div>
       <select value={g.picked} disabled={busy} onChange={(e) => onPick(e.target.value)}>
         <option value="">— pick a category —</option>
-        {categories.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
+        <CategoryOptions tree={categories} />
       </select>
       {g.ai && <span className="hint">✨ suggested by AI</span>}
       <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
@@ -364,7 +365,7 @@ function GroupCard(props: {
 
 function SplitCard(props: {
   block: Extract<Block, { kind: 'split' }>;
-  categories: string[];
+  categories: CategoryTree;
   busy: boolean;
   onPick: (key: string, c: string) => void;
   onAccept: (g: Group) => void;

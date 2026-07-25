@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { appendManualOperation, type ClassifiedOperation, type SheetsAPI } from '@mtrack/core';
 import type { Settings } from './settings';
+import {
+  buildCategoryTree,
+  CategoryOptions,
+  EMPTY_TREE,
+  type CategoryTree,
+} from './category-tree';
 import { createSheetsAPI } from './google';
 
 /**
@@ -51,7 +57,7 @@ export function CashScreen({ settings }: Props): React.JSX.Element {
   const [status, setStatus] = useState<string | null>(null);
 
   const [balances, setBalances] = useState<Balance[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<CategoryTree>(EMPTY_TREE);
 
   const [mode, setMode] = useState<Mode>('expense');
   const [accountName, setAccountName] = useState('');
@@ -75,14 +81,14 @@ export function CashScreen({ settings }: Props): React.JSX.Element {
       try {
         const [balRows, catRows] = await Promise.all([
           api.getValues('balances!A2:B'),
-          api.getValues('categories!A2:A'),
+          api.getValues('categories!A2:B'),
         ]);
         if (cancelled) return;
         const bals = balRows
           .map((r) => ({ name: String(r[0] ?? ''), currency: String(r[1] ?? '') }))
           .filter((b) => b.name);
         setBalances(bals);
-        setCategories(catRows.map((r) => r[0]).filter((c): c is string => Boolean(c)));
+        setCategories(buildCategoryTree(catRows));
         if (bals[0]) {
           setAccountName(bals[0].name);
           setCurrency(bals[0].currency);
@@ -261,11 +267,7 @@ export function CashScreen({ settings }: Props): React.JSX.Element {
           </label>
           <select id="cat" value={category} disabled={busy} onChange={(e) => setCategory(e.target.value)}>
             <option value="">— none (review in Confirm) —</option>
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
+            <CategoryOptions tree={categories} />
           </select>
           <label htmlFor="note" style={{ marginTop: 8 }}>
             Note
